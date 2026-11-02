@@ -30,6 +30,22 @@ jobs:
       - name: Test scoped routing, lifecycle and unrelated notifications
         shell: pwsh
         run: ctest --test-dir build/direct-broker -C Release --output-on-failure --timeout 60 -E BrokerPipeLifecycleNativeTests
+      - name: Test actual Windows firewall notification subscriptions
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Dynamic, nonterminating TEST-NET fixtures leave ordinary filtering
+          # intact and disappear when the test closes its WFP sessions.
+          $report = Join-Path $env:RUNNER_TEMP ("privateCloud-wfp-notifications-" + [guid]::NewGuid().ToString('N') + ".log")
+          & 'build/direct-broker/Release/LeaseNotificationTests.exe' --native $report
+          $testExit = $LASTEXITCODE
+          if(Test-Path -LiteralPath $report) {
+              Get-Content -LiteralPath $report
+          }
+          if($testExit -ne 0) {
+              throw "Windows firewall notification regression test failed with exit code $testExit."
+          }
       - name: Test pipe security as a standard Windows user
         shell: pwsh
         run: |
