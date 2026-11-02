@@ -222,6 +222,7 @@ void showVersion()
 
 enum class CommandMode {
     HelpMode,
+    ErrorMode,
     SyncingMode,
     ProvisioningMode,
     UnknownMode,
@@ -327,6 +328,10 @@ CommandMode parseOptions(const QStringList &app_args, CmdOptions *options)
         else {
             QString errorMessage;
             if (!AccountSetupCommandLineManager::instance()->parseCommandlineOption(option, it, errorMessage)) {
+                if (!errorMessage.isEmpty()) {
+                    qCritical().noquote() << errorMessage;
+                    return CommandMode::ErrorMode;
+                }
                 help();
                 result = CommandMode::HelpMode;
                 return result;
@@ -446,6 +451,10 @@ int main(int argc, char **argv)
     options.downlimit = 0;
 
     const auto commandMode = parseOptions(app.arguments(), &options);
+
+    if (commandMode == CommandMode::ErrorMode) {
+        return EXIT_FAILURE;
+    }
 
     if (commandMode == CommandMode::HelpMode) {
         return 0;

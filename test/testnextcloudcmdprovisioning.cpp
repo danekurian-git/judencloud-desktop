@@ -12,6 +12,7 @@
 #include <QtTest>
 
 #include "config.h"
+#include "account.h"
 
 // The binary is named APPLICATION_EXECUTABLEcmd and lives in OWNCLOUD_BIN_PATH.
 // Both macros are provided by the build system at compile time.
@@ -25,6 +26,12 @@ class TestNextcloudCmdProvisioning : public QObject
     Q_OBJECT
 
 private:
+    static QByteArray expectedSetupFailure()
+    {
+        return OCC::Account::enforcedServerUrl().isEmpty() ? QByteArray("Could not fetch username")
+                                                           : QByteArray("This client cannot connect to a different server.");
+    }
+
     // Runs nextcloudcmd with the given arguments, waits up to timeoutMs for it
     // to finish, and returns the combined stdout+stderr output together with the
     // exit code via out-parameters.  stdin of the child process is closed
@@ -108,12 +115,13 @@ private Q_SLOTS:
 
         // 127.0.0.1:1 gives a fast "connection refused" without DNS latency.
         int exitCode = 0;
-        const auto output = runCmd(
-            {QStringLiteral("--userid"), QStringLiteral("alice"),
-             QStringLiteral("--serverurl"), QStringLiteral("\"http://127.0.0.1:1\"")},
-            &exitCode);
+        const auto output =
+            runCmd({QStringLiteral("--userid"), QStringLiteral("alice"), QStringLiteral("--serverurl"), QStringLiteral("\"http://127.0.0.1:1\"")}, &exitCode);
 
-        QCOMPARE(exitCode, expectedExitCode);
+        QCOMPARE(exitCode, OCC::Account::enforcedServerUrl().isEmpty() ? expectedExitCode : 1);
+        if (!OCC::Account::enforcedServerUrl().isEmpty()) {
+            QVERIFY2(output.contains(expectedSetupFailure()), output.constData());
+        }
         // Must NOT fall through into interactive sync mode.
         QVERIFY2(!output.contains("Please enter username"), output.constData());
         QVERIFY2(!output.contains("Password for account with username"), output.constData());
@@ -132,13 +140,18 @@ private Q_SLOTS:
 
         // 127.0.0.1:1 gives a fast "connection refused" without DNS latency.
         int exitCode = 0;
-        const auto output = runCmd(
-            {QStringLiteral("--userid"), QStringLiteral("alice"),
-             QStringLiteral("--apppassword"), QStringLiteral("secret"),
-             QStringLiteral("--serverurl"), QStringLiteral("\"http://127.0.0.1:1\"")},
-            &exitCode);
+        const auto output = runCmd({QStringLiteral("--userid"),
+                                    QStringLiteral("alice"),
+                                    QStringLiteral("--apppassword"),
+                                    QStringLiteral("secret"),
+                                    QStringLiteral("--serverurl"),
+                                    QStringLiteral("\"http://127.0.0.1:1\"")},
+                                   &exitCode);
 
-        QCOMPARE(exitCode, expectedExitCode);
+        QCOMPARE(exitCode, OCC::Account::enforcedServerUrl().isEmpty() ? expectedExitCode : 1);
+        if (!OCC::Account::enforcedServerUrl().isEmpty()) {
+            QVERIFY2(output.contains(expectedSetupFailure()), output.constData());
+        }
         // Provisioning mode must NOT fall through into interactive sync mode.
         QVERIFY2(!output.contains("Please enter username"), output.constData());
         QVERIFY2(!output.contains("Password for account with username"), output.constData());
@@ -157,8 +170,7 @@ private Q_SLOTS:
         const auto output = runCmd({}, &exitCode);
 
         QCOMPARE(exitCode, expectedExitCode);
-        QVERIFY2(output.contains("nextcloudcmd") || output.contains("nextclouddevcmd"),
-                 output.constData());
+        QVERIFY2(output.contains("nextcloudcmd") || output.contains("nextclouddevcmd"), output.constData());
         QVERIFY2(output.contains("--userid"), output.constData());
     }
 
@@ -173,10 +185,7 @@ private Q_SLOTS:
 #endif
 
         int exitCode = 0;
-        const auto output = runCmd(
-            {QStringLiteral("--non-interactive"),
-             QStringLiteral("--userid"), QStringLiteral("alice")},
-            &exitCode);
+        const auto output = runCmd({QStringLiteral("--non-interactive"), QStringLiteral("--userid"), QStringLiteral("alice")}, &exitCode);
 
         QCOMPARE(exitCode, expectedExitCode);
         QVERIFY2(output.contains("--serverurl"), output.constData());
@@ -220,7 +229,7 @@ private Q_SLOTS:
                                     QStringLiteral("--serverurl=") + unreachableServerUrl()},
                                    &exitCode);
 
-        QVERIFY2(output.contains("Could not fetch username"), output.constData());
+        QVERIFY2(output.contains(expectedSetupFailure()), output.constData());
         QVERIFY2(!output.contains("does not exist"), output.constData());
         QCOMPARE(exitCode, 1);
     }
@@ -245,8 +254,8 @@ private Q_SLOTS:
                                    &exitCode);
 
         QVERIFY2(!output.contains("local folder because the name is empty"), output.constData());
-        // The setup got as far as contacting the server, which is where it fails here.
-        QVERIFY2(output.contains("Could not fetch username"), output.constData());
+        // Fixed-server builds reject the URL first; other builds reach the unavailable server.
+        QVERIFY2(output.contains(expectedSetupFailure()), output.constData());
         QCOMPARE(exitCode, 1);
     }
 
@@ -255,7 +264,7 @@ private Q_SLOTS:
     // event loop for any of that to happen — without one it returned success before
     // the first reply arrived.  So an unreachable server has to be reported as a
     // failure, and nothing may be left in the configuration.
-    void testAppPasswordSetupRunsTheEventLoop()
+    void testAppPasswordSetupFailsWithoutStoringAccount()
     {
         QTemporaryDir confDir;
         QVERIFY(confDir.isValid());
@@ -271,11 +280,11 @@ private Q_SLOTS:
                                     unreachableServerUrl()},
                                    &exitCode);
 
-        // 1 is the code the setup job exits with.  The options were accepted, so this
-        // is neither the 255 of a rejected command line nor the 0 of an early return
-        // that never waited for the result.
+        // An unrestricted build must wait for the asynchronous setup failure.
+        // A fixed-server build rejects this URL during argument validation.
+        // Both failures must return nonzero without persisting an account.
         QCOMPARE(exitCode, 1);
-        QVERIFY2(output.contains("Could not fetch username"), output.constData());
+        QVERIFY2(output.contains(expectedSetupFailure()), output.constData());
         QVERIFY2(!configHasAccount(confDir.path()), "a failed setup must not store an account");
     }
 };
