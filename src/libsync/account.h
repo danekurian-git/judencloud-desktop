@@ -90,7 +90,7 @@ class OWNCLOUDSYNC_EXPORT Account : public QObject
     Q_PROPERTY(QString davUser MEMBER _davUser)
     Q_PROPERTY(QString davDisplayName MEMBER _davDisplayName)
     Q_PROPERTY(QString prettyName READ prettyName NOTIFY prettyNameChanged)
-    Q_PROPERTY(QUrl url MEMBER _url)
+    Q_PROPERTY(QUrl url READ url)
     Q_PROPERTY(bool e2eEncryptionKeysGenerationAllowed MEMBER _e2eEncryptionKeysGenerationAllowed)
     Q_PROPERTY(bool askUserForMnemonic READ askUserForMnemonic WRITE setAskUserForMnemonic NOTIFY askUserForMnemonicChanged)
     Q_PROPERTY(QNetworkProxy::ProxyType proxyType READ proxyType WRITE setProxyType NOTIFY proxyTypeChanged)

@@ -73,9 +73,26 @@ private Q_SLOTS:
         QFETCH(QByteArray, fileId);
         QFETCH(QString, expectedUrl);
         const auto account = Account::create();
-        account->setUrl(QUrl{baseUrl});
+        // This fixture exercises URL formatting independently of server admission.
+        account->_url = QUrl{baseUrl};
         account->setCapabilities(capabilities);
         QCOMPARE(account->internalLinkUrl(fileId).toString(QUrl::FullyEncoded), expectedUrl);
+    }
+
+    void testAccount_urlPropertyCannotBypassSetter()
+    {
+        const auto account = Account::create();
+        const auto otherUrl = QUrl(QStringLiteral("https://unconfigured.example.com"));
+        QVERIFY(!account->setProperty("url", otherUrl));
+        QVERIFY(account->url().isEmpty());
+
+        const auto enforcedUrl = Account::enforcedServerUrl();
+        const auto initialUrl = enforcedUrl.isEmpty() ? QUrl(QStringLiteral("https://initial.example.com")) : enforcedUrl;
+        QVERIFY(account->setUrl(initialUrl));
+        QCOMPARE(account->property("url").toUrl(), initialUrl);
+        QVERIFY(!account->setProperty("url", otherUrl));
+        QCOMPARE(account->url(), initialUrl);
+        QCOMPARE(account->property("url").toUrl(), initialUrl);
     }
 
     void testAccountDavPath_unitialized_noCrash()
