@@ -25,6 +25,17 @@ class TestUriSchemeHandler : public QObject
 {
     Q_OBJECT
 
+    static QUrl allowedServerUrl(const QString &fallback)
+    {
+        const auto enforced = Account::enforcedServerUrl();
+        return enforced.isEmpty() ? QUrl(fallback) : enforced;
+    }
+
+    static QUrl loginUri(const QUrl &server)
+    {
+        return QUrl(QStringLiteral(APPLICATION_URI_HANDLER_SCHEME "://login/server:") + server.toString(QUrl::FullyEncoded));
+    }
+
 private Q_SLOTS:
     void initTestCase()
     {
@@ -67,14 +78,13 @@ private Q_SLOTS:
         QTest::addColumn<QUrl>("expectedServerUrl");
         QTest::addColumn<bool>("expectError");
 
-        QTest::newRow("login") << QUrl(QStringLiteral("nc://login/server:https://cloud.example.com")) << UriSchemeHandler::Action::Login
-                               << QUrl(QStringLiteral("https://cloud.example.com")) << false;
-
-        QTest::newRow("login encoded server") << QUrl(QStringLiteral("nc://login/server:https%3A%2F%2Fcloud.example.com")) << UriSchemeHandler::Action::Login
-                                              << QUrl(QStringLiteral("https://cloud.example.com")) << false;
-
-        QTest::newRow("login uppercase host") << QUrl(QStringLiteral("nc://LOGIN/server:https://cloud.example.com")) << UriSchemeHandler::Action::Login
-                                              << QUrl(QStringLiteral("https://cloud.example.com")) << false;
+        const auto server = allowedServerUrl(QStringLiteral("https://cloud.example.com"));
+        QTest::newRow("login") << loginUri(server) << UriSchemeHandler::Action::Login << server << false;
+        QTest::newRow("login encoded server") << QUrl(QStringLiteral(APPLICATION_URI_HANDLER_SCHEME "://login/server:")
+                                                      + QString::fromLatin1(QUrl::toPercentEncoding(server.toString())))
+                                              << UriSchemeHandler::Action::Login << server << false;
+        QTest::newRow("login uppercase host") << QUrl(QStringLiteral(APPLICATION_URI_HANDLER_SCHEME "://LOGIN/server:") + server.toString())
+                                              << UriSchemeHandler::Action::Login << server << false;
 
         QTest::newRow("login missing server prefix") << QUrl(QStringLiteral("nc://login/https://cloud.example.com")) << UriSchemeHandler::Action::Invalid
                                                      << QUrl{} << true;
@@ -130,9 +140,11 @@ private Q_SLOTS:
         theme->setOverrideServerUrl(QStringLiteral("https://cloud.example.com"));
         theme->setForceOverrideServerUrl(true);
 
-        const auto acceptedResult = UriSchemeHandler::parseUri(QUrl(QStringLiteral("nc://login/server:https://cloud.example.com/")));
+        auto server = allowedServerUrl(QStringLiteral("https://cloud.example.com"));
+        server.setPath(server.path() + QLatin1Char('/'));
+        const auto acceptedResult = UriSchemeHandler::parseUri(loginUri(server));
         QCOMPARE(acceptedResult.action, UriSchemeHandler::Action::Login);
-        QCOMPARE(acceptedResult.serverUrl, QUrl(QStringLiteral("https://cloud.example.com/")));
+        QCOMPARE(acceptedResult.serverUrl, server);
         QVERIFY(acceptedResult.error.isEmpty());
 
         const auto rejectedResult = UriSchemeHandler::parseUri(QUrl(QStringLiteral("nc://login/server:https://unconfigured.example.com")));
@@ -153,13 +165,14 @@ private Q_SLOTS:
             theme->setForceOverrideServerUrl(previousForceOverrideServerUrl);
         });
 
-        cfg.setOverrideServerUrl(QStringLiteral("https://configured.example.com"));
+        QCOMPARE(cfg.setOverrideServerUrl(QStringLiteral("https://configured.example.com")), Account::enforcedServerUrl().isEmpty());
         theme->setOverrideServerUrl(QString{});
         theme->setForceOverrideServerUrl(false);
 
-        const auto acceptedResult = UriSchemeHandler::parseUri(QUrl(QStringLiteral("nc://login/server:https://configured.example.com")));
+        const auto server = allowedServerUrl(QStringLiteral("https://configured.example.com"));
+        const auto acceptedResult = UriSchemeHandler::parseUri(loginUri(server));
         QCOMPARE(acceptedResult.action, UriSchemeHandler::Action::Login);
-        QCOMPARE(acceptedResult.serverUrl, QUrl(QStringLiteral("https://configured.example.com")));
+        QCOMPARE(acceptedResult.serverUrl, server);
         QVERIFY(acceptedResult.error.isEmpty());
 
         const auto rejectedResult = UriSchemeHandler::parseUri(QUrl(QStringLiteral("nc://login/server:https://unconfigured.example.com")));
@@ -201,10 +214,17 @@ private Q_SLOTS:
         });
 
         const auto configuredResult = UriSchemeHandler::parseUri(QUrl(u"nc://login/server:https://configured.example.com"_s));
-        QCOMPARE(configuredResult.action, UriSchemeHandler::Action::Login);
+        const auto compiledRestriction = !Account::enforcedServerUrl().isEmpty();
+        QCOMPARE(configuredResult.action, compiledRestriction ? UriSchemeHandler::Action::Invalid : UriSchemeHandler::Action::Login);
+        QCOMPARE(configuredResult.error.isEmpty(), !compiledRestriction);
+        if (compiledRestriction) {
+            const auto fixedResult = UriSchemeHandler::parseUri(loginUri(Account::enforcedServerUrl()));
+            QCOMPARE(fixedResult.action, UriSchemeHandler::Action::Login);
+            QCOMPARE(fixedResult.serverUrl, Account::enforcedServerUrl());
+        }
 
         const auto otherResult = UriSchemeHandler::parseUri(QUrl(u"nc://login/server:https://unconfigured.example.com"_s));
-        QCOMPARE(otherResult.action, enforced ? UriSchemeHandler::Action::Invalid : UriSchemeHandler::Action::Login);
+        QCOMPARE(otherResult.action, enforced || compiledRestriction ? UriSchemeHandler::Action::Invalid : UriSchemeHandler::Action::Login);
     }
 
     void parseUriHonoursMultipleServerOverrides()
@@ -224,10 +244,18 @@ private Q_SLOTS:
                            "]"));
         theme->setForceOverrideServerUrl(true);
 
-        const auto acceptedResult = UriSchemeHandler::parseUri(QUrl(QStringLiteral("nc://login/server:https://secondary.example.com")));
+        const auto server = allowedServerUrl(QStringLiteral("https://secondary.example.com"));
+        const auto acceptedResult = UriSchemeHandler::parseUri(loginUri(server));
         QCOMPARE(acceptedResult.action, UriSchemeHandler::Action::Login);
-        QCOMPARE(acceptedResult.serverUrl, QUrl(QStringLiteral("https://secondary.example.com")));
+        QCOMPARE(acceptedResult.serverUrl, server);
         QVERIFY(acceptedResult.error.isEmpty());
+        if (!Account::enforcedServerUrl().isEmpty()) {
+            for (const auto &alternative : {QStringLiteral("https://primary.example.com"), QStringLiteral("https://secondary.example.com")}) {
+                const auto denied = UriSchemeHandler::parseUri(loginUri(QUrl(alternative)));
+                QCOMPARE(denied.action, UriSchemeHandler::Action::Invalid);
+                QVERIFY(!denied.error.isEmpty());
+            }
+        }
 
         const auto rejectedResult = UriSchemeHandler::parseUri(QUrl(QStringLiteral("nc://login/server:https://unconfigured.example.com")));
         QCOMPARE(rejectedResult.action, UriSchemeHandler::Action::Invalid);
