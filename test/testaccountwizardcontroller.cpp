@@ -153,6 +153,14 @@ public:
 
     static void setLocalSyncFolderPicker(AccountWizardController &controller, AccountWizardController::LocalSyncFolderPicker picker)
     {
+        // privateCloud exposes folder selection only after authentication.
+        // Exercise the upstream asynchronous picker in that same setup state.
+        if (controller.privateCloudMode()) {
+            preparePrivateCloud(controller, [](const QString &) {
+                return QString{};
+            });
+            completeAuthentication(controller);
+        }
         controller._localSyncFolderPicker = std::move(picker);
     }
 
@@ -198,6 +206,12 @@ Q_SIGNALS:
     void signupUrlRequested(const QUrl &url);
 
 private:
+    static QUrl allowedServerUrl()
+    {
+        const auto enforced = Account::enforcedServerUrl();
+        return enforced.isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : enforced;
+    }
+
     [[nodiscard]] static auto restoreOverrideState()
     {
         ConfigFile().clearOverrideServerUrl();
@@ -918,7 +932,7 @@ private Q_SLOTS:
         });
 
         AccountWizardController controller;
-        AccountWizardControllerTestAccess::setAccountUrl(controller, QUrl(QStringLiteral("https://cloud.example")));
+        AccountWizardControllerTestAccess::setAccountUrl(controller, allowedServerUrl());
         AccountWizardControllerTestAccess::setSyncMode(controller, AccountWizardController::VirtualFiles);
         QCOMPARE(controller.syncMode(), AccountWizardController::VirtualFiles);
 
@@ -977,12 +991,10 @@ private Q_SLOTS:
     {
         AccountWizardController controller;
         AccountWizardControllerTestAccess::setLocalNetworkPermissionDenied(controller, true);
+        AccountWizardControllerTestAccess::setAccountUrl(controller, allowedServerUrl());
         QSignalSpy recoverySpy(&controller, &AccountWizardController::secureConnectionFailed);
 
-        QVERIFY(QMetaObject::invokeMethod(&controller,
-                                          "slotNoServerFoundTimeout",
-                                          Qt::DirectConnection,
-                                          Q_ARG(QUrl, QUrl(QStringLiteral("https://cloud.example")))));
+        QVERIFY(QMetaObject::invokeMethod(&controller, "slotNoServerFoundTimeout", Qt::DirectConnection, Q_ARG(QUrl, allowedServerUrl())));
 
         QCOMPARE(recoverySpy.count(), 0);
         QCOMPARE(controller.errorText(), LocalNetworkPermission::deniedError());
@@ -991,7 +1003,7 @@ private Q_SLOTS:
     void otherServerFailureOffersSecureConnectionRecovery()
     {
         AccountWizardController controller;
-        const auto serverUrl = QUrl(QStringLiteral("https://cloud.example"));
+        const auto serverUrl = allowedServerUrl();
         AccountWizardControllerTestAccess::setLocalNetworkPermissionDenied(controller, false);
         AccountWizardControllerTestAccess::setAccountUrl(controller, serverUrl);
         QSignalSpy recoverySpy(&controller, &AccountWizardController::secureConnectionFailed);
@@ -1003,22 +1015,23 @@ private Q_SLOTS:
         QCOMPARE(arguments.at(0).toString(), serverUrl.host());
         QCOMPARE(arguments.at(1).toBool(), false);
     }
-    void invalidServerUrlStaysOnServerStep()
+    void invalidServerUrlKeepsCurrentStep()
     {
         QFETCH(QString, serverUrl);
 
         AccountWizardController controller;
+        const auto initialStep = controller.currentStep();
         QSignalSpy errorSpy(&controller, &AccountWizardController::errorTextChanged);
 
         controller.setServerUrl(serverUrl);
         controller.submitServerUrl();
 
-        QCOMPARE(controller.currentStep(), AccountWizardController::ServerStep);
+        QCOMPARE(controller.currentStep(), initialStep);
         QVERIFY(!controller.errorText().isEmpty());
         QCOMPARE(errorSpy.count(), 1);
     }
 
-    void invalidServerUrlStaysOnServerStep_data()
+    void invalidServerUrlKeepsCurrentStep_data()
     {
         QTest::addColumn<QString>("serverUrl");
 
@@ -1032,13 +1045,14 @@ private Q_SLOTS:
     void rejectsIncompleteManualProxyBeforeServerCheck()
     {
         AccountWizardController controller;
+        const auto initialStep = controller.currentStep();
         QSignalSpy errorSpy(&controller, &AccountWizardController::errorTextChanged);
 
         controller.setServerUrl(QStringLiteral("https://cloud.example"));
         controller.setProxyMode(2);
         controller.submitServerUrl();
 
-        QCOMPARE(controller.currentStep(), AccountWizardController::ServerStep);
+        QCOMPARE(controller.currentStep(), initialStep);
         QCOMPARE(controller.errorText(), QStringLiteral("Proxy settings are incomplete."));
         QCOMPARE(errorSpy.count(), 1);
     }
@@ -1231,6 +1245,16 @@ private Q_SLOTS:
 
         AccountWizardController controller;
 
+        if (!Account::enforcedServerUrl().isEmpty()) {
+            QVERIFY(controller.overrideServerNames().isEmpty());
+            QVERIFY(!controller.overrideServerSelectionRequired());
+            QCOMPARE(controller.serverUrl(), Account::enforcedServerUrl().toString());
+            QVERIFY(!controller.serverUrlEditable());
+            controller.setOverrideServerIndex(1);
+            QCOMPARE(controller.serverUrl(), Account::enforcedServerUrl().toString());
+            return;
+        }
+
         QCOMPARE(controller.overrideServerNames(), QStringList({QStringLiteral("Primary"), QStringLiteral("Secondary")}));
         QVERIFY(controller.overrideServerSelectionRequired());
         QCOMPARE(controller.overrideServerIndex(), 0);
@@ -1259,16 +1283,16 @@ private Q_SLOTS:
                 theme->setStartLoginFlowAutomatically(previousStartLoginFlowAutomatically);
             });
 
-        cfg.setOverrideServerUrl(QStringLiteral("https://cloud.example"));
+        QCOMPARE(cfg.setOverrideServerUrl(QStringLiteral("https://cloud.example")), Account::enforcedServerUrl().isEmpty());
         theme->setOverrideServerUrl({});
         theme->setForceOverrideServerUrl(false);
         theme->setStartLoginFlowAutomatically(false);
 
         AccountWizardController controller;
 
-        QCOMPARE(controller.serverUrl(), QStringLiteral("https://cloud.example"));
+        QCOMPARE(controller.serverUrl(), allowedServerUrl().toString());
         QVERIFY(!controller.serverUrlEditable());
-        QVERIFY(controller.startLoginFlowAutomatically());
+        QCOMPARE(controller.startLoginFlowAutomatically(), !controller.privateCloudMode());
     }
 
     void prefillsServerUrlFromManagedDefault()
@@ -1278,7 +1302,7 @@ private Q_SLOTS:
 
         AccountWizardController controller;
 
-        QCOMPARE(controller.serverUrl(), u"https://cloud.example"_s);
+        QCOMPARE(controller.serverUrl(), allowedServerUrl().toString());
 #if defined(APPLICATION_SERVER_URL) && defined(APPLICATION_SERVER_URL_ENFORCE)
         QVERIFY(!controller.serverUrlEditable());
         QVERIFY(Theme::instance()->forceOverrideServerUrl());
@@ -1286,7 +1310,7 @@ private Q_SLOTS:
         QVERIFY(controller.serverUrlEditable());
         QVERIFY(!Theme::instance()->forceOverrideServerUrl());
 #endif
-        QVERIFY(!controller.startLoginFlowAutomatically());
+        QCOMPARE(controller.startLoginFlowAutomatically(), !Account::enforcedServerUrl().isEmpty() && !controller.privateCloudMode());
     }
 
     void locksServerUrlFromManagedPolicy()
@@ -1296,9 +1320,9 @@ private Q_SLOTS:
 
         AccountWizardController controller;
 
-        QCOMPARE(controller.serverUrl(), u"https://cloud.example"_s);
+        QCOMPARE(controller.serverUrl(), allowedServerUrl().toString());
         QVERIFY(!controller.serverUrlEditable());
-        QVERIFY(controller.startLoginFlowAutomatically());
+        QCOMPARE(controller.startLoginFlowAutomatically(), !controller.privateCloudMode());
     }
 
     void appliesOverrideLocalDirForNewAccount_data()
@@ -1352,24 +1376,28 @@ private Q_SLOTS:
         });
         if (existingAccount) {
             auto account = Account::create();
-            account->setUrl(QUrl(u"https://cloud.example"_s));
+            QVERIFY(account->setUrl(allowedServerUrl()));
             account->setDavUser(u"first"_s);
             account->setCredentials(new FakeCredentials{new FakeQNAM({})});
             accountState = AccountManager::instance()->addAccount(account);
         }
 
         AccountWizardController controller;
-        AccountWizardControllerTestAccess::setAccountUrl(controller, QUrl(u"https://cloud.example"_s));
+        AccountWizardControllerTestAccess::setAccountUrl(controller, allowedServerUrl());
         AccountWizardControllerTestAccess::initialiseLocalSyncFolder(controller);
 
-        QCOMPARE(AccountWizardControllerTestAccess::localSyncFolderOverride(controller), applies);
-        QCOMPARE(controller.localSyncFolder() == QDir::fromNativeSeparators(dir.path()), applies);
+        const auto overrideApplies = applies && !controller.privateCloudMode();
+        QCOMPARE(AccountWizardControllerTestAccess::localSyncFolderOverride(controller), overrideApplies);
+        QCOMPARE(controller.localSyncFolder() == QDir::fromNativeSeparators(dir.path()), overrideApplies);
+        if (controller.privateCloudMode()) {
+            QCOMPARE(controller.localSyncFolder(), PrivateCloudDrive::defaultSetupPath());
+        }
 
         AccountWizardControllerTestAccess::chooseSyncModeAfterCapabilities(controller);
         if (!controller.needsSyncOptions()) {
             QSKIP("This build chooses no sync options, so the wizard always finishes.");
         }
-        QCOMPARE(controller.currentStep() == AccountWizardController::SyncOptionsStep, showsSyncOptions);
+        QCOMPARE(controller.currentStep() == AccountWizardController::SyncOptionsStep, controller.privateCloudMode() || showsSyncOptions);
     }
 
 #ifdef Q_OS_LINUX

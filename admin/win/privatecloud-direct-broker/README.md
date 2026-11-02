@@ -6,7 +6,7 @@ The exception is limited to the verified privateCloud executable, resolved serve
 
 ## Build and test
 
-Run in an x64 MSVC developer shell, from the repository root:
+Run in an x64 MSVC developer shell, from the repository root. Run the tests without administrator elevation: the pipe ACL suite deliberately checks the rights of a standard interactive user. GitHub Actions runs that suite under a temporary standard account on its disposable runner.
 
 ```powershell
 cmake -S admin/win/privatecloud-direct-broker -B build/direct-broker -G Ninja -DCMAKE_BUILD_TYPE=Release

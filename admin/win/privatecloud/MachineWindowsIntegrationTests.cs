@@ -71,7 +71,7 @@ namespace PrivateCloud.Setup
                     string expected = @"C:\Program Files\privateCloud\privateCloud.exe";
                     MachineSetupProgram.ValidateInstalledApplicationImage(expected, expected);
                     MachineSetupProgram.ValidateInstalledApplicationImage(expected, expected.ToUpperInvariant());
-                    foreach (string image in new[] { null, "", @"D:\privateCloud\App\privateCloud.exe",
+                    foreach (string image in new[] { null, "", @"D:\Portable\privateCloud.exe",
                         @"C:\Program Files\privateCloud.other\privateCloud.exe", @"C:\Program Files\privateCloud\other.exe",
                         expected + ".old", "\"" + expected + "\"", expected + " --quit" })
                     {
