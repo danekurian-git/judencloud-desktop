@@ -5,12 +5,16 @@
 
 #include "gui/accountmanager.h"
 #include "gui/creds/webflowcredentials.h"
+#include "gui/creds/privatecloudcredentialsdialog.h"
+#include "privateclouddrive.h"
 #include "gui/systray.h"
 #include "gui/tray/usermodel.h"
 #include "gui/wizard/browserreauthcontroller.h"
 #include "syncenginetestutils.h"
 #include "theme.h"
 
+#include <QApplication>
+#include <QLineEdit>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QEvent>
@@ -30,6 +34,7 @@
 #include <memory>
 
 using namespace OCC;
+using namespace Qt::StringLiterals;
 
 class BrowserOpeningHandler : public QObject
 {
@@ -45,7 +50,8 @@ Q_SIGNALS:
     void urlOpened(const QUrl &url);
 };
 
-namespace {
+namespace
+{
 
 class TestWebFlowCredentials final : public WebFlowCredentials
 {
@@ -101,32 +107,32 @@ QQuickWindow *findBrowserReAuthWindow()
 
 void configureSuccessfulLoginFlow(FakeQNAM *networkAccessManager)
 {
-    networkAccessManager->setOverride([networkAccessManager](
-                                          QNetworkAccessManager::Operation operation,
-                                          const QNetworkRequest &request,
-                                          QIODevice *) -> QNetworkReply * {
-        if (request.url().path() == QStringLiteral("/index.php/login/v2")) {
-            const auto response = QJsonObject {
-                {QStringLiteral("poll"), QJsonObject {
-                                             {QStringLiteral("token"), QStringLiteral("poll-token")},
-                                             {QStringLiteral("endpoint"), QStringLiteral("http://cloud.example/login/v2/poll")},
-                                         }},
-                {QStringLiteral("login"), QStringLiteral("http://cloud.example/login/v2/flow")},
-            };
-            return new FakeJsonReply(operation, request, networkAccessManager, 200, QJsonDocument(response));
-        }
+    const auto serverUrl = Account::enforcedServerUrl().isEmpty() ? QUrl(u"http://cloud.example"_s) : Account::enforcedServerUrl();
+    networkAccessManager->setOverride(
+        [networkAccessManager, serverUrl](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            if (request.url().path() == QStringLiteral("/index.php/login/v2")) {
+                const auto response = QJsonObject{
+                    {QStringLiteral("poll"),
+                     QJsonObject{
+                         {QStringLiteral("token"), QStringLiteral("poll-token")},
+                         {QStringLiteral("endpoint"), serverUrl.resolved(QUrl(u"/login/v2/poll"_s)).toString()},
+                     }},
+                    {QStringLiteral("login"), serverUrl.resolved(QUrl(u"/login/v2/flow"_s)).toString()},
+                };
+                return new FakeJsonReply(operation, request, networkAccessManager, 200, QJsonDocument(response));
+            }
 
-        if (request.url().path() == QStringLiteral("/login/v2/poll")) {
-            const auto response = QJsonObject {
-                {QStringLiteral("server"), QStringLiteral("http://cloud.example")},
-                {QStringLiteral("loginName"), QStringLiteral("alice")},
-                {QStringLiteral("appPassword"), QStringLiteral("app-password")},
-            };
-            return new FakeJsonReply(operation, request, networkAccessManager, 200, QJsonDocument(response));
-        }
+            if (request.url().path() == QStringLiteral("/login/v2/poll")) {
+                const auto response = QJsonObject{
+                    {QStringLiteral("server"), serverUrl.toString()},
+                    {QStringLiteral("loginName"), QStringLiteral("alice")},
+                    {QStringLiteral("appPassword"), QStringLiteral("app-password")},
+                };
+                return new FakeJsonReply(operation, request, networkAccessManager, 200, QJsonDocument(response));
+            }
 
-        return nullptr;
-    });
+            return nullptr;
+        });
 }
 
 } // namespace
@@ -136,6 +142,16 @@ class TestBrowserReAuthController : public QObject
     Q_OBJECT
 
     std::unique_ptr<FolderMan> _fm;
+
+    static PrivateCloudCredentialsDialog *findPrivateCloudDialog()
+    {
+        for (auto *widget : QApplication::topLevelWidgets()) {
+            if (auto *dialog = qobject_cast<PrivateCloudCredentialsDialog *>(widget)) {
+                return dialog;
+            }
+        }
+        return nullptr;
+    }
 
 private Q_SLOTS:
     void initTestCase()
@@ -158,18 +174,20 @@ private Q_SLOTS:
     void cleanup()
     {
         QDesktopServices::unsetUrlHandler(QStringLiteral("http"));
+        QDesktopServices::unsetUrlHandler(u"https"_s);
 
         if (auto *window = findBrowserReAuthWindow()) {
             window->close();
+        }
+        if (auto *dialog = findPrivateCloudDialog()) {
+            dialog->reject();
         }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
 
     void sharedWizardWindowDoesNotEnableMinimizationByDefault()
     {
-        QQmlComponent component(
-            Systray::instance()->trayEngine(),
-            QUrl(QStringLiteral("qrc:/qml/src/gui/WizardStyledWindow.qml")));
+        QQmlComponent component(Systray::instance()->trayEngine(), QUrl(QStringLiteral("qrc:/qml/src/gui/WizardStyledWindow.qml")));
         const auto window = std::unique_ptr<QObject>(component.create());
 
         QVERIFY2(window, qPrintable(component.errorString()));
@@ -178,17 +196,15 @@ private Q_SLOTS:
         QVERIFY(!quickWindow->flags().testFlag(Qt::WindowMinimizeButtonHint));
     }
 
-    void replacesAndPersistsCredentialsThroughQmlWindow()
+    void replacesAndPersistsCredentialsThroughActiveWindow()
     {
         BrowserOpeningHandler browserOpeningHandler;
-        QDesktopServices::setUrlHandler(
-            QStringLiteral("http"),
-            &browserOpeningHandler,
-            "openUrl");
+        QDesktopServices::setUrlHandler(QStringLiteral("http"), &browserOpeningHandler, "openUrl");
+        QDesktopServices::setUrlHandler(u"https"_s, &browserOpeningHandler, "openUrl");
         QSignalSpy browserSpy(&browserOpeningHandler, &BrowserOpeningHandler::urlOpened);
 
         const auto account = AccountManager::createAccount();
-        account->setUrl(QUrl(QStringLiteral("http://cloud.example")));
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(u"http://cloud.example"_s) : Account::enforcedServerUrl()));
         auto *const networkAccessManager = new FakeQNAM({});
         configureSuccessfulLoginFlow(networkAccessManager);
         auto *const credentials = new TestWebFlowCredentials(networkAccessManager);
@@ -198,6 +214,32 @@ private Q_SLOTS:
         QSignalSpy askedSpy(credentials, &AbstractCredentials::asked);
 
         credentials->askFromUser();
+
+        if (PrivateCloudDrive::isEnabled()) {
+            auto *dialog = findPrivateCloudDialog();
+            QVERIFY(dialog);
+            auto *username = dialog->findChild<QLineEdit *>(u"privateCloudUsername"_s);
+            auto *password = dialog->findChild<QLineEdit *>(u"privateCloudPassword"_s);
+            QVERIFY(username);
+            QVERIFY(password);
+            QCOMPARE(username->text(), u"old-user"_s);
+            QVERIFY(password->text().isEmpty());
+            QPointer<PrivateCloudCredentialsDialog> guard(dialog);
+            // Authentication request/response checks live in PrivateCloudAuthenticationTest.
+            // This exercises the real dialog-to-credential persistence connection.
+            Q_EMIT dialog->credentialsReady(u"alice"_s, u"app-password"_s);
+            dialog->accept();
+            QCOMPARE(askedSpy.count(), 1);
+            QCOMPARE(credentials->user(), u"alice"_s);
+            QCOMPARE(credentials->password(), u"app-password"_s);
+            QCOMPARE(credentials->persistCount(), 1);
+            QCOMPARE(credentials->persistedUser(), u"alice"_s);
+            QCOMPARE(credentials->persistedPassword(), u"app-password"_s);
+            QCOMPARE(AccountManager::instance()->accounts().size(), registeredAccountCount);
+            QCOMPARE(browserSpy.count(), 0);
+            QTRY_VERIFY(guard.isNull());
+            return;
+        }
 
         QQuickWindow *window = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT((window = findBrowserReAuthWindow()) != nullptr, 5000);
@@ -219,22 +261,33 @@ private Q_SLOTS:
         QTRY_VERIFY_WITH_TIMEOUT(windowGuard.isNull(), 5000);
     }
 
-    void closingQmlWindowCancelsWithoutReplacingCredentials()
+    void closingActiveWindowCancelsWithoutReplacingCredentials()
     {
         const auto account = AccountManager::createAccount();
-        account->setUrl(QUrl(QStringLiteral("http://cloud.example")));
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(u"http://cloud.example"_s) : Account::enforcedServerUrl()));
         auto *const networkAccessManager = new FakeQNAM({});
-        networkAccessManager->setOverride([networkAccessManager](
-                                              QNetworkAccessManager::Operation operation,
-                                              const QNetworkRequest &request,
-                                              QIODevice *) -> QNetworkReply * {
-            return new FakeHangingReply(operation, request, networkAccessManager);
-        });
+        networkAccessManager->setOverride(
+            [networkAccessManager](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+                return new FakeHangingReply(operation, request, networkAccessManager);
+            });
         auto *const credentials = new TestWebFlowCredentials(networkAccessManager);
         account->setCredentials(credentials);
         QSignalSpy askedSpy(credentials, &AbstractCredentials::asked);
 
         credentials->askFromUser();
+
+        if (PrivateCloudDrive::isEnabled()) {
+            auto *dialog = findPrivateCloudDialog();
+            QVERIFY(dialog);
+            QPointer<PrivateCloudCredentialsDialog> guard(dialog);
+            dialog->reject();
+            QCOMPARE(askedSpy.count(), 1);
+            QCOMPARE(credentials->user(), u"old-user"_s);
+            QCOMPARE(credentials->password(), u"old-password"_s);
+            QCOMPARE(credentials->persistCount(), 0);
+            QTRY_VERIFY(guard.isNull());
+            return;
+        }
 
         QQuickWindow *window = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT((window = findBrowserReAuthWindow()) != nullptr, 5000);

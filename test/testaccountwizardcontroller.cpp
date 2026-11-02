@@ -938,7 +938,13 @@ private Q_SLOTS:
 
         AccountWizardControllerTestAccess::chooseSyncModeAfterCapabilities(controller);
 
-        QVERIFY(controller.syncMode() != AccountWizardController::VirtualFiles);
+        if (controller.privateCloudMode()) {
+            QCOMPARE(controller.syncMode(), AccountWizardController::VirtualFiles);
+            QVERIFY(!controller.canUseClassicSync());
+            QVERIFY(!controller.canUseVirtualFiles());
+        } else {
+            QVERIFY(controller.syncMode() != AccountWizardController::VirtualFiles);
+        }
         QVERIFY(controller.needsSyncOptions());
         QVERIFY(controller.localSyncFolderRequired());
     }
@@ -1393,7 +1399,11 @@ private Q_SLOTS:
             QCOMPARE(controller.localSyncFolder(), PrivateCloudDrive::defaultSetupPath());
         }
 
-        AccountWizardControllerTestAccess::chooseSyncModeAfterCapabilities(controller);
+        if (controller.privateCloudMode()) {
+            AccountWizardControllerTestAccess::completeAuthentication(controller);
+        } else {
+            AccountWizardControllerTestAccess::chooseSyncModeAfterCapabilities(controller);
+        }
         if (!controller.needsSyncOptions()) {
             QSKIP("This build chooses no sync options, so the wizard always finishes.");
         }

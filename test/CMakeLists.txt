@@ -285,6 +285,13 @@ nextcloud_add_test(AccountState)
 nextcloud_add_test(AccountWizardController)
 nextcloud_add_test(PrivateCloudAuthentication)
 nextcloud_add_test(BrowserReAuthController)
+if(WIN32)
+    set_tests_properties(AccountWizardControllerTest BrowserReAuthControllerTest PROPERTIES ENVIRONMENT
+        "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1")
+    file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts" headless_test_font_dir)
+    set_property(TEST AccountWizardControllerTest BrowserReAuthControllerTest APPEND PROPERTY ENVIRONMENT
+        "QT_QPA_FONTDIR=${headless_test_font_dir}")
+endif()
 nextcloud_add_test(ConnectionValidator)
 nextcloud_add_test(Folder)
 nextcloud_add_test(FolderMan)

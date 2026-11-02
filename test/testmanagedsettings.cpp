@@ -62,6 +62,12 @@ class TestManagedSettings : public QObject
 {
     Q_OBJECT
 
+    static QString expectedServerUrl(const QString &fallback = {})
+    {
+        const auto enforced = Account::enforcedServerUrl();
+        return enforced.isEmpty() ? fallback : enforced.toString();
+    }
+
     static SettingDefinition skipSpec()
     {
         return {QStringLiteral("skipUpdateCheck"), false, true};
@@ -230,9 +236,8 @@ private Q_SLOTS:
     void testForcedSourceContributesOnlyForcedKeys()
     {
         FakeForcedSource source(200,
-            {QStringLiteral("skipUpdateCheck")},
-            QVariantMap{{QStringLiteral("skipUpdateCheck"), true},
-                {QStringLiteral("autoUpdateCheck"), false}});
+                                {QStringLiteral("skipUpdateCheck")},
+                                QVariantMap{{QStringLiteral("skipUpdateCheck"), true}, {QStringLiteral("autoUpdateCheck"), false}});
 
         QCOMPARE(source.type(), SettingSourceType::PlatformPolicy);
         QCOMPARE(source.enforcement(), EnforcementState::Enforced);
@@ -338,7 +343,7 @@ private Q_SLOTS:
         ConfigFile config;
         config.setConfDir(dir.path());
 
-        QVERIFY(config.overrideServerUrl().isEmpty());
+        QCOMPARE(config.overrideServerUrl(), expectedServerUrl());
         QVERIFY(!config.hasUserOverrideServerUrl());
     }
 
@@ -352,7 +357,7 @@ private Q_SLOTS:
                         20,
                         QVariantMap{{u"overrideServerUrl"_s, u"https://cloud.example.com"_s}});
 
-        QCOMPARE(config.overrideServerUrl(), u"https://cloud.example.com"_s);
+        QCOMPARE(config.overrideServerUrl(), expectedServerUrl(u"https://cloud.example.com"_s));
         QCOMPARE(config.sourceOf(u"overrideServerUrl"_s), SettingSourceType::PlatformDefault);
         QVERIFY(!config.isEnforced(u"overrideServerUrl"_s));
         QVERIFY(!config.hasUserOverrideServerUrl());
@@ -371,7 +376,7 @@ private Q_SLOTS:
 
         config.clearOverrideServerUrl();
 
-        QCOMPARE(config.overrideServerUrl(), u"https://cloud.example.com"_s);
+        QCOMPARE(config.overrideServerUrl(), expectedServerUrl(u"https://cloud.example.com"_s));
         QCOMPARE(config.sourceOf(u"overrideServerUrl"_s), SettingSourceType::PlatformDefault);
         QVERIFY(!config.hasUserOverrideServerUrl());
     }
@@ -386,10 +391,10 @@ private Q_SLOTS:
                         20,
                         QVariantMap{{u"overrideServerUrl"_s, u"https://cloud.example.com"_s}});
 
-        QVERIFY(config.setOverrideServerUrl(u"https://user.example.com"_s));
+        QCOMPARE(config.setOverrideServerUrl(u"https://user.example.com"_s), Account::enforcedServerUrl().isEmpty());
 
-        QCOMPARE(config.overrideServerUrl(), u"https://user.example.com"_s);
-        QVERIFY(config.hasUserOverrideServerUrl());
+        QCOMPARE(config.overrideServerUrl(), expectedServerUrl(u"https://user.example.com"_s));
+        QCOMPARE(config.hasUserOverrideServerUrl(), Account::enforcedServerUrl().isEmpty());
     }
 
     void testEnforcedOverrideServerUrlIgnoresUserValue()
@@ -404,14 +409,14 @@ private Q_SLOTS:
 
         QVERIFY(!config.setOverrideServerUrl(u"https://user.example.com"_s));
 
-        QCOMPARE(config.overrideServerUrl(), u"https://cloud.example.com"_s);
+        QCOMPARE(config.overrideServerUrl(), expectedServerUrl(u"https://cloud.example.com"_s));
         QVERIFY(config.isEnforced(u"overrideServerUrl"_s));
         QVERIFY(!config.hasUserOverrideServerUrl());
 
         ConfigFile::setDeviceSourcesFactory([] {
             return std::vector<std::unique_ptr<SettingSource>>{};
         });
-        QVERIFY(config.overrideServerUrl().isEmpty());
+        QCOMPARE(config.overrideServerUrl(), expectedServerUrl());
     }
 
     void testOverrideLocalDirFromDevicePolicy()
@@ -513,10 +518,10 @@ private Q_SLOTS:
             setDeviceSource(SettingSourceType::PlatformPolicy, EnforcementState::Enforced, 200, values);
         }
         if (userValue) {
-            QVERIFY(config.setOverrideServerUrl(u"https://user.example.com"_s));
+            QCOMPARE(config.setOverrideServerUrl(u"https://user.example.com"_s), Account::enforcedServerUrl().isEmpty());
         }
 
-        QCOMPARE(config.isOverrideServerUrlLocked(), locked);
+        QCOMPARE(config.isOverrideServerUrlLocked(), locked || !Account::enforcedServerUrl().isEmpty());
     }
 
     void testEmptyUserOverrideServerUrlFallsBackToDeviceDefault()
@@ -532,7 +537,7 @@ private Q_SLOTS:
         settings.setValue(u"overrideServerUrl"_s, QString());
         settings.sync();
 
-        QCOMPARE(config.overrideServerUrl(), u"https://cloud.example.com"_s);
+        QCOMPARE(config.overrideServerUrl(), expectedServerUrl(u"https://cloud.example.com"_s));
         QCOMPARE(config.sourceOf(u"overrideServerUrl"_s), SettingSourceType::PlatformDefault);
         QVERIFY(!config.hasUserOverrideServerUrl());
     }
@@ -625,8 +630,7 @@ private Q_SLOTS:
     {
         ServerManagedSettings raw;
         raw.defaults = QVariantMap{{QStringLiteral("autoUpdateCheck"), false}, {QStringLiteral("bogus"), 1}};
-        raw.enforced = QVariantMap{{QStringLiteral("virtualFilesMode"), QStringLiteral("wincfapi")},
-            {QStringLiteral("secretKey"), QStringLiteral("x")}};
+        raw.enforced = QVariantMap{{QStringLiteral("virtualFilesMode"), QStringLiteral("wincfapi")}, {QStringLiteral("secretKey"), QStringLiteral("x")}};
 
         const auto clean = sanitizeServerManagedSettings(raw);
 
@@ -770,12 +774,14 @@ private Q_SLOTS:
     void testCapabilitiesParsesDesktopClientManagedSettings()
     {
         const QVariantMap caps{
-            {QStringLiteral("support"), QVariantMap{
-                {QStringLiteral("desktopClient"), QVariantMap{
-                    {QStringLiteral("schemaVersion"), 1},
-                    {QStringLiteral("enforced"), QVariantMap{{QStringLiteral("skipUpdateCheck"), true}}},
-                }},
-            }},
+            {QStringLiteral("support"),
+             QVariantMap{
+                 {QStringLiteral("desktopClient"),
+                  QVariantMap{
+                      {QStringLiteral("schemaVersion"), 1},
+                      {QStringLiteral("enforced"), QVariantMap{{QStringLiteral("skipUpdateCheck"), true}}},
+                  }},
+             }},
         };
         const Capabilities capabilities(caps);
         const auto parsed = capabilities.desktopClientManagedSettings();
@@ -1182,8 +1188,7 @@ private Q_SLOTS:
         settings.enforced = QVariantMap{{QStringLiteral("virtualFilesMode"), QStringLiteral("off")}};
         config.setServerManagedSettings(settings);
 
-        QCOMPARE(config.sourceLabel(QStringLiteral("virtualFilesMode")),
-                 QStringLiteral("Managed by your organization"));
+        QCOMPARE(config.sourceLabel(QStringLiteral("virtualFilesMode")), QStringLiteral("Managed by your organization"));
     }
 
     void testManagedVirtualFilesModeReportsDefaultAndEnforcement()
@@ -1234,8 +1239,8 @@ private Q_SLOTS:
         ServerManagedSettings raw;
         raw.defaults = QVariantMap{{QStringLiteral("skipUpdateCheck"), true}};
         raw.enforced = QVariantMap{{QStringLiteral("skipUpdateCheck"), true},
-            {QStringLiteral("proxyHost"), QStringLiteral("evil.example.com")},
-            {QStringLiteral("virtualFilesMode"), QStringLiteral("wincfapi")}};
+                                   {QStringLiteral("proxyHost"), QStringLiteral("evil.example.com")},
+                                   {QStringLiteral("virtualFilesMode"), QStringLiteral("wincfapi")}};
 
         const auto clean = sanitizeServerManagedSettings(raw);
 
