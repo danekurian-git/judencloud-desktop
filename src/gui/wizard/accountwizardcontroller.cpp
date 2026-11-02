@@ -10,6 +10,7 @@
 #include "clientproxy.h"
 #include "common/utility.h"
 #include "common/vfs.h"
+#include "config.h"
 #include "configfile.h"
 #include "creds/credentialsfactory.h"
 #include "creds/httpcredentialsgui.h"
@@ -31,7 +32,9 @@
 #endif
 
 #ifdef Q_OS_MACOS
+#include "common/macsandboxpersistentaccess.h"
 #include "common/utility_mac_sandbox.h"
+#include "macOS/macsandboxfolderpicker.h"
 #endif
 
 #include <QBuffer>
@@ -54,6 +57,7 @@
 #include <QStorageInfo>
 #include <QTimer>
 #include <QUuid>
+#include <QWindow>
 
 using namespace Qt::StringLiterals;
 
@@ -64,6 +68,12 @@ Q_LOGGING_CATEGORY(lcAccountWizardController, "nextcloud.gui.accountwizardcontro
 
 namespace
 {
+
+#if defined(APPLICATION_SERVER_URL) && defined(APPLICATION_SERVER_URL_ENFORCE)
+constexpr auto buildEnforcesServerUrl = true;
+#else
+constexpr auto buildEnforcesServerUrl = false;
+#endif
 
 bool localFolderContainsData(const QString &localSyncFolder)
 {
@@ -101,8 +111,8 @@ AccountWizardController::AccountWizardController(QObject *parent)
         const auto storageError = Utility::syncRootStorageError(path);
         return storageError.isEmpty() ? PrivateCloudDrive::checkAvailability(path) : storageError;
     })
-    , _localSyncFolderDialog([](const QString &startFolder) {
-        return QFileDialog::getExistingDirectory(nullptr, tr("Local Sync Folder"), startFolder, QFileDialog::ShowDirsOnly);
+    , _localSyncFolderPicker([this](const QString &caption, const QString &startFolder, std::function<void(const QString &, const QByteArray &)> completion) {
+        pickLocalSyncFolder(caption, startFolder, std::move(completion));
     })
 {
     initialiseAccount();
@@ -113,7 +123,9 @@ AccountWizardController::AccountWizardController(QObject *parent)
     _largeFolderThresholdMb = static_cast<int>(largeFolderLimit.second);
     _askBeforeExternalStorage = cfg.confirmExternalStorage();
 
-    if (privateCloudMode() || canUseVirtualFiles()) {
+    seedProxySettingsFromManagedDefault();
+
+    if (privateCloudMode() || (canUseVirtualFiles() && !(accountManagedVirtualFilesMode().isManaged && !accountManagedVirtualFilesMode().enabled))) {
         _syncMode = VirtualFiles;
     }
     if (privateCloudMode()) {
@@ -149,16 +161,30 @@ bool AccountWizardController::resumePrivateCloudSetup(Folder *folder)
     return true;
 }
 
+void AccountWizardController::setWindow(QWindow *window)
+{
+    _window = window;
+}
+
+int AccountWizardController::resultOnClose() const
+{
+    return _currentStep == CompletedStep ? QDialog::Accepted : QDialog::Rejected;
+}
+
 void AccountWizardController::initialiseAccount()
 {
     ConfigFile cfg;
     if (!cfg.overrideServerUrl().isEmpty()) {
         Theme::instance()->setOverrideServerUrl(cfg.overrideServerUrl());
-        Theme::instance()->setForceOverrideServerUrl(true);
         if (Account::enforcedServerUrl().isEmpty()) {
             Theme::instance()->setVfsEnabled(cfg.isVfsEnabled());
         }
-        Theme::instance()->setStartLoginFlowAutomatically(true);
+        if (cfg.isOverrideServerUrlLocked()) {
+            Theme::instance()->setForceOverrideServerUrl(true);
+            Theme::instance()->setStartLoginFlowAutomatically(true);
+        } else {
+            Theme::instance()->setForceOverrideServerUrl(buildEnforcesServerUrl);
+        }
     }
 
     initialiseOverrideServerChoices();
@@ -382,9 +408,18 @@ bool AccountWizardController::canFinish() const
     return !localSyncFolderRequired() || _localSyncFolderValid;
 }
 
+ManagedVirtualFilesMode AccountWizardController::accountManagedVirtualFilesMode() const
+{
+    return _account ? ConfigFile().managedVirtualFilesMode(_account->serverManagedSettings()) : ConfigFile().managedVirtualFilesMode();
+}
+
 bool AccountWizardController::canUseVirtualFiles() const
 {
     if (Theme::instance()->disableVirtualFilesSyncFolder()) {
+        return false;
+    }
+
+    if (const auto managedVfs = accountManagedVirtualFilesMode(); managedVfs.isEnforced && !managedVfs.enabled) {
         return false;
     }
 
@@ -411,7 +446,9 @@ bool AccountWizardController::canUseClassicSync() const
     if (privateCloudMode()) {
         return false;
     }
-    return !Theme::instance()->enforceVirtualFilesSyncFolder() || !canUseVirtualFiles();
+    const auto managedVfs = accountManagedVirtualFilesMode();
+    const auto vfsEnforced = Theme::instance()->enforceVirtualFilesSyncFolder() || (managedVfs.isEnforced && managedVfs.enabled);
+    return !vfsEnforced || !canUseVirtualFiles();
 }
 
 bool AccountWizardController::needsSyncOptions() const
@@ -452,6 +489,25 @@ bool AccountWizardController::showExternalStorageConfirmation() const
 bool AccountWizardController::askBeforeExternalStorage() const
 {
     return _askBeforeExternalStorage;
+}
+
+void AccountWizardController::seedProxySettingsFromManagedDefault()
+{
+    // A managed default is only a suggestion for a new account; enforced policy applies separately.
+    if (!proxySettingsAvailable()) {
+        return;
+    }
+
+    const auto managedProxy = ConfigFile().managedProxySettings();
+    if (managedProxy.typeManaged && !managedProxy.typeEnforced) {
+        _proxySettings._proxyType = static_cast<QNetworkProxy::ProxyType>(managedProxy.proxyType);
+    }
+    if (managedProxy.hostManaged && !managedProxy.hostEnforced) {
+        _proxySettings._host = managedProxy.proxyHostName;
+    }
+    if (managedProxy.portManaged && !managedProxy.portEnforced && managedProxy.proxyPort > 0) {
+        _proxySettings._port = static_cast<quint16>(managedProxy.proxyPort);
+    }
 }
 
 bool AccountWizardController::proxySettingsAvailable() const
@@ -869,8 +925,12 @@ void AccountWizardController::startServerCheck(const QUrl &serverUrl)
     setBusy(true);
     setAuthStatusText(tr("Checking server address") + QStringLiteral("…"));
 
-    if (proxySettingsAvailable() && (ClientProxy::isUsingSystemDefault() || _account->proxyType() == QNetworkProxy::DefaultProxy)) {
+    const auto proxyMode = ClientProxy::accountProxyMode(*_account);
+    if (proxySettingsAvailable() && proxyMode == ClientProxy::AccountProxyMode::SystemProxy) {
         ClientProxy::lookupSystemProxyAsync(_account->url(), this, SLOT(slotSystemProxyLookupDone(QNetworkProxy)));
+    } else if (proxyMode == ClientProxy::AccountProxyMode::AccountProxy) {
+        _account->applyProxyToNetworkAccessManager();
+        QMetaObject::invokeMethod(this, "slotFindServer", Qt::QueuedConnection);
     } else {
         _account->networkAccessManager()->setProxy(QNetworkProxy(proxySettingsAvailable() ? QNetworkProxy::DefaultProxy : QNetworkProxy::NoProxy));
         QMetaObject::invokeMethod(this, "slotFindServer", Qt::QueuedConnection);
@@ -1048,7 +1108,7 @@ void AccountWizardController::copyLoginLink()
 
 void AccountWizardController::openSignup()
 {
-    Utility::openBrowser(QUrl(u"https://nextcloud.com/sign-up/?flow=V3"_s));
+    Utility::openBrowser(Theme::instance()->wizardSignupUrl());
 }
 
 void AccountWizardController::openSelfHostedServerGuide()
@@ -1241,6 +1301,39 @@ void AccountWizardController::completeAuthentication()
     initialiseLocalSyncFolder();
     fetchRootFolderSize();
 
+    // Load capabilities before choosing, so a server enforced mode is honored; fall back on failure.
+    _syncModeChosen = false;
+    auto *capabilitiesJob = new JsonApiJob(_account, QStringLiteral("ocs/v1.php/cloud/capabilities"), this);
+    capabilitiesJob->setTimeout(10 * 1000);
+    const auto choose = [this, capabilitiesJob] {
+        if (_syncModeChosen) {
+            return;
+        }
+        _syncModeChosen = true;
+        capabilitiesJob->deleteLater();
+        chooseSyncModeAfterCapabilities();
+    };
+    connect(capabilitiesJob, &JsonApiJob::jsonReceived, this, [this, choose](const QJsonDocument &json, int statusCode) {
+        if (statusCode == 100) {
+            const auto caps =
+                json.object().value(QStringLiteral("ocs")).toObject().value(QStringLiteral("data")).toObject().value(QStringLiteral("capabilities")).toObject();
+            _account->setCapabilities(caps.toVariantMap());
+        }
+        choose();
+    });
+    connect(capabilitiesJob, &AbstractNetworkJob::networkError, this, [choose] {
+        choose();
+    });
+    capabilitiesJob->start();
+}
+
+void AccountWizardController::chooseSyncModeAfterCapabilities()
+{
+    // Capabilities may now forbid virtual files.
+    if (_syncMode == VirtualFiles && !canUseVirtualFiles()) {
+        setSyncMode(SyncEverything);
+    }
+
 #ifdef BUILD_FILE_PROVIDER_MODULE
     setNeedsSyncOptions(!canUseVirtualFiles());
 #else
@@ -1249,7 +1342,8 @@ void AccountWizardController::completeAuthentication()
 
     if (needsSyncOptions()) {
         ConfigFile cfg;
-        if (Theme::instance()->forceOverrideServerUrl() && !cfg.overrideLocalDir().isEmpty()) {
+        const auto localDirLocked = cfg.isEnforced(QLatin1String(ConfigFile::overrideLocalDirC)) || cfg.hasUserOverrideLocalDir();
+        if (Theme::instance()->forceOverrideServerUrl() && localDirLocked && !applicableOverrideLocalDir().isEmpty()) {
             QTimer::singleShot(0, this, &AccountWizardController::finish);
             return;
         }
@@ -1411,9 +1505,14 @@ void AccountWizardController::finish()
     }
 
     if (_syncMode == SyncEverything) {
+        // Only write what the user changed, so the wizard does not store a server default as a user value.
         ConfigFile cfgFile;
-        cfgFile.setNewBigFolderSizeLimit(_askBeforeLargeFolders, _largeFolderThresholdMb);
-        cfgFile.setConfirmExternalStorage(_askBeforeExternalStorage);
+        if (cfgFile.newBigFolderSizeLimit() != qMakePair(_askBeforeLargeFolders, static_cast<qint64>(_largeFolderThresholdMb))) {
+            cfgFile.setNewBigFolderSizeLimit(_askBeforeLargeFolders, _largeFolderThresholdMb);
+        }
+        if (cfgFile.confirmExternalStorage() != _askBeforeExternalStorage) {
+            cfgFile.setConfirmExternalStorage(_askBeforeExternalStorage);
+        }
     }
 
     if (localSyncFolderRequired()) {
@@ -1458,8 +1557,13 @@ AccountState *AccountWizardController::applyAccountChanges()
 void AccountWizardController::clearOneShotOverrides()
 {
     ConfigFile cfg;
-    cfg.setOverrideServerUrl({});
-    cfg.setOverrideLocalDir({});
+    cfg.clearOverrideServerUrl();
+    cfg.clearOverrideLocalDir();
+}
+
+QString AccountWizardController::applicableOverrideLocalDir() const
+{
+    return ConfigFile().overrideLocalDirForNewAccount(AccountManager::instance()->accounts().isEmpty());
 }
 
 void AccountWizardController::initialiseLocalSyncFolder()
@@ -1469,12 +1573,11 @@ void AccountWizardController::initialiseLocalSyncFolder()
         setLocalSyncFolder(_privateCloudFolder ? _privateCloudFolder->path() : PrivateCloudDrive::defaultSetupPath());
         return;
     }
-    ConfigFile cfg;
-    const auto overrideLocalDir = !cfg.overrideLocalDir().isEmpty();
+    const auto overrideLocalDir = !applicableOverrideLocalDir().isEmpty();
     _localSyncFolderOverride = overrideLocalDir;
     QString localFolder;
     if (overrideLocalDir) {
-        localFolder = cfg.overrideLocalDir();
+        localFolder = applicableOverrideLocalDir();
     } else {
 #ifndef Q_OS_MACOS
         localFolder = Theme::instance()->defaultClientFolder();
@@ -1489,8 +1592,14 @@ void AccountWizardController::initialiseLocalSyncFolder()
                        overrideLocalDir);
 }
 
-void AccountWizardController::setLocalSyncFolder(const QString &localSyncFolder, bool selectedByUser)
+void AccountWizardController::setLocalSyncFolder(const QString &localSyncFolder, bool selectedByUser, const QByteArray &bookmarkData)
 {
+    _localSyncFolderBookmarkData = bookmarkData;
+#ifdef Q_OS_MACOS
+    // Keeps sandbox access to the chosen folder for the checks below and for creating the sync folder.
+    _localSyncFolderAccess = Utility::MacSandboxPersistentAccess::createValidFromBookmarkData(bookmarkData);
+#endif
+
     const auto normalizedLocalSyncFolder = QDir::fromNativeSeparators(localSyncFolder);
     const auto localSyncFolderSelected = _localSyncFolderSelected || selectedByUser;
     if (_localSyncFolder == normalizedLocalSyncFolder && _localSyncFolderSelected == localSyncFolderSelected) {
@@ -1517,15 +1626,7 @@ void AccountWizardController::promptForInitialLocalSyncFolderIfNeeded()
             return;
         }
 
-        _localSyncFolderPickerOpen = true;
-        validateLocalSyncFolder();
-        const auto selectedFolder = openLocalSyncFolderDialog(true);
-        _localSyncFolderPickerOpen = false;
-        if (!selectedFolder.isEmpty()) {
-            setLocalSyncFolder(selectedFolder, true);
-        } else {
-            validateLocalSyncFolder();
-        }
+        openLocalSyncFolderDialog(true);
     });
 #endif
 }
@@ -1794,19 +1895,15 @@ void AccountWizardController::completeRemoteFolderCheck()
     Q_EMIT finished(QDialog::Accepted);
 }
 
-bool AccountWizardController::createSyncFolder(AccountState *accountState)
+FolderDefinition AccountWizardController::syncFolderDefinition() const
 {
-    if (!accountState) {
-        setErrorText(tr("Account setup failed while creating the sync folder."));
-        return false;
-    }
-
     FolderDefinition folderDefinition;
     folderDefinition.localPath = FolderDefinition::prepareLocalPath(_localSyncFolder);
     folderDefinition.targetPath = FolderDefinition::prepareTargetPath(_remoteFolder);
     folderDefinition.ignoreHiddenFiles = FolderMan::instance()->ignoreHiddenFiles();
     folderDefinition.paused = privateCloudMode();
     folderDefinition.privateCloudSetupPending = privateCloudMode();
+    folderDefinition.securityScopedBookmarkData = _localSyncFolderBookmarkData;
 
 #ifndef BUILD_FILE_PROVIDER_MODULE
     if (_syncMode == VirtualFiles) {
@@ -1819,6 +1916,18 @@ bool AccountWizardController::createSyncFolder(AccountState *accountState)
         folderDefinition.navigationPaneClsid = QUuid::createUuid();
     }
 #endif
+
+    return folderDefinition;
+}
+
+bool AccountWizardController::createSyncFolder(AccountState *accountState)
+{
+    if (!accountState) {
+        setErrorText(tr("Account setup failed while creating the sync folder."));
+        return false;
+    }
+
+    const auto folderDefinition = syncFolderDefinition();
 
     auto *folderMan = FolderMan::instance();
     folderMan->setSyncEnabled(false);
@@ -1894,18 +2003,30 @@ void AccountWizardController::chooseLocalSyncFolder()
     if (_busy || _cancelled || (privateCloudMode() && (_currentStep != SyncOptionsStep || _privateCloudFolder))) {
         return;
     }
-    const auto selectedFolder = openLocalSyncFolderDialog(false);
-    if (_cancelled || selectedFolder.isEmpty()) {
+    openLocalSyncFolderDialog(false);
+}
+
+void AccountWizardController::pickLocalSyncFolder(const QString &caption,
+                                                  const QString &startFolder,
+                                                  std::function<void(const QString &, const QByteArray &)> completion)
+{
+#ifdef Q_OS_MACOS
+    // QFileDialog gives up the sandbox access to the chosen folder before returning, so only the
+    // native panel can provide a bookmark for it.
+    Mac::SandboxFolderPicker::select(_window, caption, startFolder, [completion = std::move(completion)](Mac::SandboxFolderPicker::FolderSelection selection) {
+        completion(selection.path, selection.bookmarkData);
+    });
+#else
+    completion(QFileDialog::getExistingDirectory(nullptr, caption, startFolder, QFileDialog::ShowDirsOnly), {});
+#endif
+}
+
+void AccountWizardController::openLocalSyncFolderDialog(bool initialSelection)
+{
+    if (_localSyncFolderPickerOpen) {
         return;
     }
 
-    setErrorText({});
-    _localSyncFolderOverride = false;
-    setLocalSyncFolder(selectedFolder, true);
-}
-
-QString AccountWizardController::openLocalSyncFolderDialog(bool initialSelection) const
-{
     QString startFolder = _localSyncFolder;
     if (initialSelection) {
 #ifdef Q_OS_MACOS
@@ -1921,7 +2042,27 @@ QString AccountWizardController::openLocalSyncFolderDialog(bool initialSelection
 #endif
     }
 
-    return _localSyncFolderDialog(startFolder);
+    _localSyncFolderPickerOpen = true;
+    validateLocalSyncFolder();
+
+    const QPointer<AccountWizardController> controller(this);
+    _localSyncFolderPicker(tr("Local Sync Folder"), startFolder, [controller, initialSelection](const QString &selectedFolder, const QByteArray &bookmarkData) {
+        if (!controller || controller->_cancelled) {
+            return;
+        }
+
+        controller->_localSyncFolderPickerOpen = false;
+        if (selectedFolder.isEmpty()) {
+            controller->validateLocalSyncFolder();
+            return;
+        }
+
+        if (!initialSelection) {
+            controller->_localSyncFolderOverride = false;
+        }
+        controller->setErrorText({});
+        controller->setLocalSyncFolder(selectedFolder, true, bookmarkData);
+    });
 }
 
 void AccountWizardController::openSelectiveSync()

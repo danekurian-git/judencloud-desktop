@@ -16,7 +16,8 @@
 #include <cstring>
 #include <type_traits>
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcRemotePermissions, "nextcloud.sync.remotepermissions", QtInfoMsg)
 
@@ -27,7 +28,7 @@ bool RemotePermissions::isExternalStorageType(const QString &mountType)
     return mountType == QStringLiteral("external") || mountType == QStringLiteral("external-session");
 }
 
-template <typename Char>
+template<typename Char>
 void RemotePermissions::fromArray(const Char *p)
 {
     _value = notNullMask;
@@ -76,12 +77,10 @@ RemotePermissions RemotePermissions::fromDbValue(const QByteArray &value)
     return perm;
 }
 
-template <typename T>
-RemotePermissions RemotePermissions::internalFromServerString(const QString &value,
-                                                              const T&otherProperties,
-                                                              MountedPermissionAlgorithm algorithm)
+template<typename T>
+RemotePermissions RemotePermissions::internalFromServerString(const QString &value, const T &otherProperties, MountedPermissionAlgorithm algorithm)
 {
-    constexpr auto shareAttributesDecoder = [] (const auto &shareAttributes, RemotePermissions &perm) -> void {
+    constexpr auto shareAttributesDecoder = [](const auto &shareAttributes, RemotePermissions &perm) -> void {
         auto missingDownloadPermission = false;
         const auto &jsonArray = shareAttributes.array();
         for (const auto &oneEntry : jsonArray) {
@@ -127,8 +126,9 @@ RemotePermissions RemotePermissions::internalFromServerString(const QString &val
         return perm;
     }
 
-    if ((otherProperties.contains(QStringLiteral("is-mount-root")) && otherProperties.value(QStringLiteral("is-mount-root")) == QStringLiteral("false") && perm.hasPermission(RemotePermissions::IsMounted)) ||
-        (!otherProperties.contains(QStringLiteral("is-mount-root")) && perm.hasPermission(RemotePermissions::IsMounted))) {
+    if ((otherProperties.contains(QStringLiteral("is-mount-root")) && otherProperties.value(QStringLiteral("is-mount-root")) == QStringLiteral("false")
+         && perm.hasPermission(RemotePermissions::IsMounted))
+        || (!otherProperties.contains(QStringLiteral("is-mount-root")) && perm.hasPermission(RemotePermissions::IsMounted))) {
         /* All the entries in a external storage have 'M' in their permission. However, for all
            purposes in the desktop client, we only need to know about the mount points.
            So replace the 'M' by a 'm' for every sub entries in an external storage */
@@ -139,16 +139,12 @@ RemotePermissions RemotePermissions::internalFromServerString(const QString &val
     return perm;
 }
 
-RemotePermissions RemotePermissions::fromServerString(const QString &value,
-                                                      MountedPermissionAlgorithm algorithm,
-                                                      const QMap<QString, QString> &otherProperties)
+RemotePermissions RemotePermissions::fromServerString(const QString &value, MountedPermissionAlgorithm algorithm, const QMap<QString, QString> &otherProperties)
 {
     return internalFromServerString(value, otherProperties, algorithm);
 }
 
-RemotePermissions RemotePermissions::fromServerString(const QString &value,
-                                                      MountedPermissionAlgorithm algorithm,
-                                                      const QVariantMap &otherProperties)
+RemotePermissions RemotePermissions::fromServerString(const QString &value, MountedPermissionAlgorithm algorithm, const QVariantMap &otherProperties)
 {
     return internalFromServerString(value, otherProperties, algorithm);
 }

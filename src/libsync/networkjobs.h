@@ -25,7 +25,8 @@ class QJsonObject;
 class QJsonDocument;
 class QDomDocument;
 
-namespace OCC {
+namespace OCC
+{
 
 constexpr auto HttpErrorCodeNone = 0;
 constexpr auto HttpErrorCodeSuccess = 200;
@@ -34,13 +35,12 @@ constexpr auto HttpErrorCodeSuccessNoContent = 204;
 constexpr auto HttpErrorCodeBadRequest = 400;
 constexpr auto HttpErrorCodeUnsupportedMediaType = 415;
 
-struct HttpError
-{
+struct HttpError {
     int code; // HTTP error code
     QString message;
 };
 
-template <typename T>
+template<typename T>
 using HttpResult = Result<T, HttpError>;
 
 /**
@@ -71,11 +71,9 @@ class OWNCLOUDSYNC_EXPORT SimpleFileJob : public AbstractNetworkJob
 public:
     explicit SimpleFileJob(AccountPtr account, const QString &filePath, QObject *parent = nullptr);
 
-    QNetworkReply *startRequest(
-        const QByteArray &verb, const QNetworkRequest req = QNetworkRequest(), QIODevice *requestBody = nullptr);
+    QNetworkReply *startRequest(const QByteArray &verb, const QNetworkRequest req = QNetworkRequest(), QIODevice *requestBody = nullptr);
 
-    QNetworkReply *startRequest(const QByteArray &verb, const QUrl &url, const QNetworkRequest req = QNetworkRequest(),
-        QIODevice *requestBody = nullptr);
+    QNetworkReply *startRequest(const QByteArray &verb, const QUrl &url, const QNetworkRequest req = QNetworkRequest(), QIODevice *requestBody = nullptr);
 
 Q_SIGNALS:
     void finishedSignal(QNetworkReply *reply);
@@ -122,9 +120,7 @@ class OWNCLOUDSYNC_EXPORT LsColXMLParser : public QObject
 public:
     explicit LsColXMLParser();
 
-    bool parse(const QByteArray &xml,
-               QHash<QString, ExtraFolderInfo> *sizes,
-               const QString &expectedPath);
+    bool parse(const QByteArray &xml, QHash<QString, ExtraFolderInfo> *sizes, const QString &expectedPath);
 
 Q_SIGNALS:
     void directoryListingSubfolders(const QStringList &items);
@@ -317,8 +313,7 @@ class OWNCLOUDSYNC_EXPORT MkColJob : public AbstractNetworkJob
 public:
     explicit MkColJob(AccountPtr account, const QString &path, QObject *parent = nullptr);
     explicit MkColJob(AccountPtr account, const QString &path, const QMap<QByteArray, QByteArray> &extraHeaders, QObject *parent = nullptr);
-    explicit MkColJob(AccountPtr account, const QUrl &url,
-        const QMap<QByteArray, QByteArray> &extraHeaders, QObject *parent = nullptr);
+    explicit MkColJob(AccountPtr account, const QUrl &url, const QMap<QByteArray, QByteArray> &extraHeaders, QObject *parent = nullptr);
     void start() override;
 
 Q_SIGNALS:
@@ -399,9 +394,9 @@ public:
 
 Q_SIGNALS:
     /**
-    * a check is finished
-    * \a statusCode cost-free URL GET HTTP response code
-    */
+     * a check is finished
+     * \a statusCode cost-free URL GET HTTP response code
+     */
     void jobFinished(int statusCode);
     /** A timeout occurred.
      *
@@ -413,7 +408,6 @@ private:
     bool finished() override;
     void onTimedOut() override;
 };
-
 
 /**
  * @brief The RequestEtagJob class
@@ -442,7 +436,7 @@ public:
         Post,
         Put,
         Delete,
-        };
+    };
 
     explicit SimpleApiJob(const AccountPtr &account, const QString &path, QObject *parent = nullptr);
 
@@ -475,9 +469,9 @@ Q_SIGNALS:
 protected:
     bool finished() override;
 
-    [[nodiscard]] QNetworkRequest& request();
-    [[nodiscard]] QByteArray& body();
-    [[nodiscard]] QUrlQuery& additionalParams();
+    [[nodiscard]] QNetworkRequest &request();
+    [[nodiscard]] QByteArray &body();
+    [[nodiscard]] QUrlQuery &additionalParams();
     [[nodiscard]] QByteArray verbToString() const;
 
 private:
@@ -544,7 +538,7 @@ public:
     enum AuthType {
         NoAuthType, // used only before we got a chance to probe the server
         Basic, // also the catch-all fallback for backwards compatibility reasons
-        LoginFlowV2
+        LoginFlowV2,
     };
     Q_ENUM(AuthType)
 
@@ -575,32 +569,13 @@ class OWNCLOUDSYNC_EXPORT SimpleNetworkJob : public AbstractNetworkJob
 public:
     explicit SimpleNetworkJob(AccountPtr account, QObject *parent = nullptr);
 
-    QNetworkReply *startRequest(const QByteArray &verb, const QUrl &url,
-        QNetworkRequest req = QNetworkRequest(),
-        QIODevice *requestBody = nullptr);
+    QNetworkReply *startRequest(const QByteArray &verb, const QUrl &url, QNetworkRequest req = QNetworkRequest(), QIODevice *requestBody = nullptr);
 
 Q_SIGNALS:
     void finishedSignal(QNetworkReply *reply);
 private Q_SLOTS:
     bool finished() override;
 };
-
-/**
- * @brief Runs a PROPFIND to figure out the private link url
- *
- * The numericFileId is used only to build the deprecatedPrivateLinkUrl
- * locally as a fallback. If it's empty and the PROPFIND fails, targetFun
- * will be called with an empty string.
- *
- * The job and signal connections are parented to the target QObject.
- *
- * Note: targetFun is guaranteed to be called only through the event
- * loop and never directly.
- */
-void OWNCLOUDSYNC_EXPORT fetchPrivateLinkUrl(
-    AccountPtr account, const QString &remotePath,
-    const QByteArray &numericFileId, QObject *target,
-    std::function<void(const QString &url)> targetFun);
 
 } // namespace OCC
 

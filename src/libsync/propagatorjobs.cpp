@@ -29,14 +29,15 @@
 #include <ctime>
 #include <optional>
 
-
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcPropagateLocalRemove, "nextcloud.sync.propagator.localremove", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcPropagateLocalMkdir, "nextcloud.sync.propagator.localmkdir", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcPropagateLocalRename, "nextcloud.sync.propagator.localrename", QtInfoMsg)
 
-namespace {
+namespace
+{
 
 std::atomic_uint pendingLocalFileOperations = 0;
 
@@ -53,8 +54,7 @@ std::optional<QString> journalRelativePath(const QString &syncRoot, const QStrin
     if (relativePath == QLatin1Char('.')) {
         relativePath.clear();
     }
-    if (QDir::isAbsolutePath(relativePath) || relativePath == QStringLiteral("..")
-        || relativePath.startsWith(QStringLiteral("../"))) {
+    if (QDir::isAbsolutePath(relativePath) || relativePath == QStringLiteral("..") || relativePath.startsWith(QStringLiteral("../"))) {
         return std::nullopt;
     }
     return relativePath;
@@ -314,6 +314,23 @@ void PropagateLocalRemove::start()
     const QString filename = propagator()->fullLocalPath(_item->_file);
     qCInfo(lcPropagateLocalRemove) << "Going to delete:" << filename;
 
+    if (propagator()->localPathContainsSymlink(_item->_file)) {
+        qCWarning(lcPropagateLocalRemove) << "Do not delete through a symlink, dropping the stale record" << _item->_file;
+        if (!propagator()->_journal->deleteFileRecord(_item->_originalFile, _item->isDirectory())) {
+            qCWarning(lcPropagateLocalRemove) << "could not delete file record from local DB" << _item->_originalFile;
+        }
+        propagator()->_journal->commit("Local remove symlink");
+        done(SyncFileItem::FileIgnored, OwncloudPropagator::symlinkNotSupportedMessage(), ErrorCategory::NoError);
+        return;
+    }
+
+    if (propagator()->localFileNameClash(_item->_file)) {
+        done(SyncFileItem::FileNameClash,
+             tr("Could not remove %1 because of a local file name clash").arg(QDir::toNativeSeparators(filename)),
+             ErrorCategory::GenericError);
+        return;
+    }
+
     if (_item->isDirectory()) {
         Q_EMIT propagator()->touchedFile(filename);
     }
@@ -348,6 +365,12 @@ void PropagateLocalMkdir::setDeleteExistingFile(bool enabled)
 
 void PropagateLocalMkdir::startLocalMkdir()
 {
+    if (propagator()->localPathContainsSymlink(_item->_file)) {
+        qCWarning(lcPropagateLocalMkdir) << "Do not create a folder through a symlink" << _item->_file;
+        done(SyncFileItem::FileIgnored, OwncloudPropagator::symlinkNotSupportedMessage(), ErrorCategory::NoError);
+        return;
+    }
+
     QDir newDir(propagator()->fullLocalPath(_item->_file));
     QString newDirStr = QDir::toNativeSeparators(newDir.path());
 
@@ -357,9 +380,7 @@ void PropagateLocalMkdir::startLocalMkdir()
         if (_deleteExistingFile) {
             QString removeError;
             if (!FileSystem::remove(newDirStr, &removeError)) {
-                done(SyncFileItem::NormalError,
-                    tr("could not delete file %1, error: %2")
-                        .arg(newDirStr, removeError), ErrorCategory::GenericError);
+                done(SyncFileItem::NormalError, tr("could not delete file %1, error: %2").arg(newDirStr, removeError), ErrorCategory::GenericError);
                 return;
             }
         } else if (_item->_instruction == CSYNC_INSTRUCTION_CONFLICT) {
@@ -373,7 +394,9 @@ void PropagateLocalMkdir::startLocalMkdir()
 
     if (Utility::fsCasePreserving() && propagator()->localFileNameClash(_item->_file)) {
         qCWarning(lcPropagateLocalMkdir) << "New folder to create locally already exists with different case:" << _item->_file;
-        done(SyncFileItem::FileNameClash, tr("Folder %1 cannot be created because of a local file or folder name clash!").arg(newDirStr), ErrorCategory::GenericError);
+        done(SyncFileItem::FileNameClash,
+             tr("Folder %1 cannot be created because of a local file or folder name clash!").arg(newDirStr),
+             ErrorCategory::GenericError);
         return;
     }
 
@@ -388,17 +411,11 @@ void PropagateLocalMkdir::startLocalMkdir()
             parentNeedRollbackPermissions = true;
             Q_EMIT propagator()->touchedFile(QString::fromStdWString(parentFolderPath.wstring()));
         }
-    }
-    catch (const std::filesystem::filesystem_error &e)
-    {
+    } catch (const std::filesystem::filesystem_error &e) {
         qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights" << e.what() << e.path1().c_str() << e.path2().c_str();
-    }
-    catch (const std::system_error &e)
-    {
+    } catch (const std::system_error &e) {
         qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights" << e.what();
-    }
-    catch (...)
-    {
+    } catch (...) {
         qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights";
     }
 
@@ -409,27 +426,22 @@ void PropagateLocalMkdir::startLocalMkdir()
         return;
     }
 
-    if (!_item->_remotePerm.isNull() &&
-        !_item->_remotePerm.hasPermissionsForReadWrite()) {
+    if (!_item->_remotePerm.isNull() && !_item->_remotePerm.hasPermissionsForReadWrite()) {
         try {
             FileSystem::setFolderPermissions(newDirStr, FileSystem::FolderPermissions::ReadOnly);
-        }
-        catch (const std::filesystem::filesystem_error &e)
-        {
+        } catch (const std::filesystem::filesystem_error &e) {
             qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights" << e.what() << e.path1().c_str() << e.path2().c_str();
             done(SyncFileItem::NormalError, tr("The folder %1 cannot be made read-only: %2").arg(_item->_file, e.what()), ErrorCategory::GenericError);
             return;
-        }
-        catch (const std::system_error &e)
-        {
+        } catch (const std::system_error &e) {
             qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights" << e.what();
             done(SyncFileItem::NormalError, tr("The folder %1 cannot be made read-only: %2").arg(_item->_file, e.what()), ErrorCategory::GenericError);
             return;
-        }
-        catch (...)
-        {
+        } catch (...) {
             qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights";
-            done(SyncFileItem::NormalError, tr("The folder %1 cannot be made read-only: %2").arg(_item->_file, tr("unknown exception")), ErrorCategory::GenericError);
+            done(SyncFileItem::NormalError,
+                 tr("The folder %1 cannot be made read-only: %2").arg(_item->_file, tr("unknown exception")),
+                 ErrorCategory::GenericError);
             return;
         }
     }
@@ -439,17 +451,11 @@ void PropagateLocalMkdir::startLocalMkdir()
             FileSystem::setFolderPermissions(QString::fromStdWString(parentFolderPath.wstring()), FileSystem::FolderPermissions::ReadOnly);
             Q_EMIT propagator()->touchedFile(QString::fromStdWString(parentFolderPath.wstring()));
         }
-    }
-    catch (const std::filesystem::filesystem_error &e)
-    {
+    } catch (const std::filesystem::filesystem_error &e) {
         qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights" << e.what() << e.path1().c_str() << e.path2().c_str();
-    }
-    catch (const std::system_error &e)
-    {
+    } catch (const std::system_error &e) {
         qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights" << e.what();
-    }
-    catch (...)
-    {
+    } catch (...) {
         qCWarning(lcPropagateLocalMkdir) << "exception when checking parent folder access rights";
     }
 
@@ -470,9 +476,7 @@ void PropagateLocalMkdir::startLocalMkdir()
     }
     propagator()->_journal->commit("localMkdir");
 
-    auto resultStatus = _item->_instruction == CSYNC_INSTRUCTION_CONFLICT
-        ? SyncFileItem::Conflict
-        : SyncFileItem::Success;
+    auto resultStatus = _item->_instruction == CSYNC_INSTRUCTION_CONFLICT ? SyncFileItem::Conflict : SyncFileItem::Success;
     done(resultStatus, {}, ErrorCategory::NoError);
 }
 
@@ -490,6 +494,16 @@ void PropagateLocalRename::start()
 
     auto &vfs = propagator()->syncOptions()._vfs;
     const auto previousNameInDb = propagator()->adjustRenamedPath(_item->_file);
+
+    for (const auto &path : {previousNameInDb, _item->_renameTarget}) {
+        if (!propagator()->localPathContainsSymlink(path)) {
+            continue;
+        }
+        qCWarning(lcPropagateLocalRename) << "Do not rename through a symlink" << path;
+        done(SyncFileItem::FileIgnored, OwncloudPropagator::symlinkNotSupportedMessage(), ErrorCategory::NoError);
+        return;
+    }
+
     const auto existingFile = propagator()->fullLocalPath(previousNameInDb);
     const auto targetFile = propagator()->fullLocalPath(_item->_renameTarget);
     const auto originalFile = propagator()->fullLocalPath(_item->_originalFile);
@@ -508,7 +522,8 @@ void PropagateLocalRename::start()
 
     // if the file is a file underneath a moved dir, the _item->file is equal
     // to _item->renameTarget and the file is not moved as a result.
-    qCDebug(lcPropagateLocalRename) << _item->_file << _item->_renameTarget << _item->_originalFile << previousNameInDb << (fileAlreadyMoved ? "original file has already moved" : "original file is still there");
+    qCDebug(lcPropagateLocalRename) << _item->_file << _item->_renameTarget << _item->_originalFile << previousNameInDb
+                                    << (fileAlreadyMoved ? "original file has already moved" : "original file is still there");
     qCDebug(lcPropagateLocalRename()) << (origExists ? "original file exists" : "original file is missing") << originalFile << _item->_originalFile;
     qCDebug(lcPropagateLocalRename()) << (existingExists ? "existing file exists" : "existing file is missing") << existingFile << previousNameInDb;
     Q_ASSERT(origExists || existingExists);
@@ -516,9 +531,7 @@ void PropagateLocalRename::start()
         propagator()->reportProgress(*_item, 0);
         qCDebug(lcPropagateLocalRename) << "MOVE " << existingFile << " => " << targetFile;
 
-        if (QString::compare(_item->_file, _item->_renameTarget, Qt::CaseInsensitive) != 0
-            && propagator()->localFileNameClash(_item->_renameTarget)) {
-
+        if (QString::compare(_item->_file, _item->_renameTarget, Qt::CaseInsensitive) != 0 && propagator()->localFileNameClash(_item->_renameTarget)) {
             qCInfo(lcPropagateLocalRename) << "renaming a case clashed item" << _item->_file << _item->_renameTarget;
             if (_item->isDirectory()) {
                 // #HotFix
@@ -534,7 +547,9 @@ void PropagateLocalRename::start()
             if (caseClashConflictResult) {
                 done(SyncFileItem::SoftError, *caseClashConflictResult, ErrorCategory::GenericError);
             } else {
-                done(SyncFileItem::FileNameClash, tr("File %1 downloaded but it resulted in a local file name clash!").arg(QDir::toNativeSeparators(_item->_file)), ErrorCategory::GenericError);
+                done(SyncFileItem::FileNameClash,
+                     tr("File %1 downloaded but it resulted in a local file name clash!").arg(QDir::toNativeSeparators(_item->_file)),
+                     ErrorCategory::GenericError);
             }
             return;
         }
@@ -550,17 +565,11 @@ void PropagateLocalRename::start()
                 FileSystem::setFolderPermissions(QString::fromStdWString(targetParentFolderPath.wstring()), FileSystem::FolderPermissions::ReadWrite);
                 Q_EMIT propagator()->touchedFile(QString::fromStdWString(targetParentFolderPath.wstring()));
             }
-        }
-        catch (const std::filesystem::filesystem_error &e)
-        {
+        } catch (const std::filesystem::filesystem_error &e) {
             qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights" << e.what() << e.path1().c_str() << e.path2().c_str();
-        }
-        catch (const std::system_error &e)
-        {
+        } catch (const std::system_error &e) {
             qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights" << e.what();
-        }
-        catch (...)
-        {
+        } catch (...) {
             qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights";
         }
 
@@ -575,35 +584,24 @@ void PropagateLocalRename::start()
                 FileSystem::setFolderPermissions(QString::fromStdWString(originParentFolderPath.wstring()), FileSystem::FolderPermissions::ReadWrite);
                 Q_EMIT propagator()->touchedFile(QString::fromStdWString(originParentFolderPath.wstring()));
             }
-        }
-        catch (const std::filesystem::filesystem_error &e)
-        {
+        } catch (const std::filesystem::filesystem_error &e) {
             qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights" << e.what() << e.path1().c_str() << e.path2().c_str();
-        }
-        catch (const std::system_error &e)
-        {
+        } catch (const std::system_error &e) {
             qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights" << e.what();
-        }
-        catch (...)
-        {
+        } catch (...) {
             qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights";
         }
 
-        const auto restoreTargetPermissions = [this] (const auto &parentFolderPath) {
+        const auto restoreTargetPermissions = [this](const auto &parentFolderPath) {
             try {
                 FileSystem::setFolderPermissions(QString::fromStdWString(parentFolderPath.wstring()), FileSystem::FolderPermissions::ReadOnly);
                 Q_EMIT propagator()->touchedFile(QString::fromStdWString(parentFolderPath.wstring()));
-            }
-            catch (const std::filesystem::filesystem_error &e)
-            {
-                qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights" << e.what() << e.path1().c_str() << e.path2().c_str();
-            }
-            catch (const std::system_error &e)
-            {
+            } catch (const std::filesystem::filesystem_error &e) {
+                qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights" << e.what() << e.path1().c_str()
+                                                  << e.path2().c_str();
+            } catch (const std::system_error &e) {
                 qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights" << e.what();
-            }
-            catch (...)
-            {
+            } catch (...) {
                 qCWarning(lcPropagateLocalRename) << "exception when checking parent folder access rights";
             }
         };
@@ -668,37 +666,38 @@ void PropagateLocalRename::start()
         }
     } else if (!fileAlreadyMoved) {
         qCDebug(lcPropagateLocalRename) << "propagate child items after move from" << existingFile << "to" << targetFile;
-        const auto dbQueryResult = propagator()->_journal->getFilesBelowPath(previousNameInDb.toUtf8(), [previousNameInDb, this] (const SyncJournalFileRecord &record) -> void {
-            const auto oldFileNameString = propagator()->adjustRenamedPath(QString::fromUtf8(record._path));
-            auto newFileNameString = oldFileNameString;
-            newFileNameString.replace(0, previousNameInDb.length(), _item->_renameTarget);
+        const auto dbQueryResult =
+            propagator()->_journal->getFilesBelowPath(previousNameInDb.toUtf8(), [previousNameInDb, this](const SyncJournalFileRecord &record) -> void {
+                const auto oldFileNameString = propagator()->adjustRenamedPath(QString::fromUtf8(record._path));
+                auto newFileNameString = oldFileNameString;
+                newFileNameString.replace(0, previousNameInDb.length(), _item->_renameTarget);
 
-            qCDebug(lcPropagateLocalRename) << "child rename from" << oldFileNameString << "to" << newFileNameString;
+                qCDebug(lcPropagateLocalRename) << "child rename from" << oldFileNameString << "to" << newFileNameString;
 
-            if (oldFileNameString == newFileNameString) {
-                Q_ASSERT(false);
-                return;
-            }
+                if (oldFileNameString == newFileNameString) {
+                    Q_ASSERT(false);
+                    return;
+                }
 
-            SyncJournalFileRecord oldRecord;
-            if (!propagator()->_journal->getFileRecord(oldFileNameString, &oldRecord)) {
-                qCWarning(lcPropagateLocalRename) << "Could not get file from local DB" << oldFileNameString;
-                return;
-            }
-            if (!propagator()->_journal->deleteFileRecord(oldFileNameString)) {
-                qCWarning(lcPropagateLocalRename) << "could not delete file from local DB" << oldFileNameString;
-                return;
-            }
+                SyncJournalFileRecord oldRecord;
+                if (!propagator()->_journal->getFileRecord(oldFileNameString, &oldRecord)) {
+                    qCWarning(lcPropagateLocalRename) << "Could not get file from local DB" << oldFileNameString;
+                    return;
+                }
+                if (!propagator()->_journal->deleteFileRecord(oldFileNameString)) {
+                    qCWarning(lcPropagateLocalRename) << "could not delete file from local DB" << oldFileNameString;
+                    return;
+                }
 
-            const auto newItem = SyncFileItem::fromSyncJournalFileRecord(oldRecord);
-            newItem->_file = newFileNameString;
-            newItem->_lockToken.clear();
-            newItem->_locked = SyncFileItem::LockStatus::UnlockedItem;
-            const auto result = propagator()->updateMetadata(*newItem);
-            if (!result) {
-                return;
-            }
-        });
+                const auto newItem = SyncFileItem::fromSyncJournalFileRecord(oldRecord);
+                newItem->_file = newFileNameString;
+                newItem->_lockToken.clear();
+                newItem->_locked = SyncFileItem::LockStatus::UnlockedItem;
+                const auto result = propagator()->updateMetadata(*newItem);
+                if (!result) {
+                    return;
+                }
+            });
         if (!dbQueryResult) {
             done(SyncFileItem::FatalError, tr("Failed to propagate directory rename in hierarchy"), OCC::ErrorCategory::GenericError);
             return;

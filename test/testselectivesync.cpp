@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2023 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2018 ownCloud, Inc.
  * SPDX-License-Identifier: CC0-1.0
- * 
+ *
  * This software is in the public domain, furnished "as is", without technical
  * support, and with no warranty, express or implied, as to its usefulness for
  * any purpose.
@@ -15,7 +15,6 @@
 #include <syncengine.h>
 
 using namespace OCC;
-
 
 class TestSelectiveSync : public QObject
 {
@@ -32,14 +31,13 @@ private Q_SLOTS:
 
     void testSelectiveSyncBigFolders()
     {
-        FakeFolder fakeFolder { FileInfo::A12_B12_C12_S12() };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         SyncOptions options;
         options._newBigFolderSizeLimit = 20000; // 20 K
         fakeFolder.syncEngine().setSyncOptions(options);
 
         QStringList sizeRequests;
-        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation, const QNetworkRequest &req, QIODevice *device)
-                                         -> QNetworkReply * {
+        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation, const QNetworkRequest &req, QIODevice *device) -> QNetworkReply * {
             // Record what path we are querying for the size
             if (req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "PROPFIND") {
                 if (device->readAll().contains("<size ")) {
@@ -333,20 +331,19 @@ private Q_SLOTS:
         QVERIFY(fakeFolder.syncOnce());
 
         auto mkdirRequestsCounter = 0;
-        fakeFolder.setServerOverride([&mkdirRequestsCounter, mkcolVerb](QNetworkAccessManager::Operation, const QNetworkRequest &req, QIODevice *device)
-                                         -> QNetworkReply * {
-            Q_UNUSED(device)
+        fakeFolder.setServerOverride(
+            [&mkdirRequestsCounter, mkcolVerb](QNetworkAccessManager::Operation, const QNetworkRequest &req, QIODevice *device) -> QNetworkReply * {
+                Q_UNUSED(device)
 
-            if (req.attribute(QNetworkRequest::CustomVerbAttribute) == mkcolVerb) {
-                ++mkdirRequestsCounter;
-            }
-            qDebug() << req.attribute(QNetworkRequest::CustomVerbAttribute);
+                if (req.attribute(QNetworkRequest::CustomVerbAttribute) == mkcolVerb) {
+                    ++mkdirRequestsCounter;
+                }
+                qDebug() << req.attribute(QNetworkRequest::CustomVerbAttribute);
 
-            return nullptr;
-        });
+                return nullptr;
+            });
 
-        fakeFolder.syncEngine().journal()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList,
-                                                                QStringList() << QLatin1String("topFolder"));
+        fakeFolder.syncEngine().journal()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, QStringList() << QLatin1String("topFolder"));
         fakeFolder.remoteModifier().extraDavProperties = "<oc:data-fingerprint>changed_finger_print</oc:data-fingerprint>";
 
         QVERIFY(fakeFolder.syncOnce());

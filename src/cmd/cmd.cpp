@@ -19,17 +19,18 @@
 #include <qdebug.h>
 
 #include "account.h"
+#ifdef BUILD_GUI
 #include "accountmanager.h"
 #include "accountsetupcommandlinemanager.h"
 #include "folderman.h"
+#endif
 #include "configfile.h" // ONLY ACCESS THE STATIC FUNCTIONS!
 #include "settings/migration.h"
 #ifdef TOKEN_AUTH_ONLY
-# include "creds/tokencredentials.h"
+#include "creds/tokencredentials.h"
 #else
-# include "creds/httpcredentials.h"
+#include "creds/httpcredentials.h"
 #endif
-#include "creds/webflowcredentials.h"
 #include "networkjobs.h"
 #include "simplesslerrorhandler.h"
 #include "syncengine.h"
@@ -39,7 +40,6 @@
 #include "common/vfs.h"
 #include "config.h"
 #include "csync_exclude.h"
-
 
 #include "cmd.h"
 
@@ -63,8 +63,7 @@ static void nullMessageHandler(QtMsgType, const QMessageLogContext &, const QStr
 {
 }
 
-struct CmdOptions
-{
+struct CmdOptions {
     QString source_dir;
     QString target_url;
     QString remotePath = u"/"_s;
@@ -192,7 +191,8 @@ void help()
     std::cout << "  --user, -u [name]      Use [name] as the login name" << std::endl;
     std::cout << "  --password, -p [pass]  Use [pass] as password" << std::endl;
     std::cout << "  -n                     Use netrc (5) for login" << std::endl;
-    std::cout << "  --non-interactive      Do not block execution with interaction and tries to read $NC_USER and $NC_PASSWORD if not set by other means" << std::endl;
+    std::cout << "  --non-interactive      Do not block execution with interaction and tries to read $NC_USER and $NC_PASSWORD if not set by other means"
+              << std::endl;
     std::cout << "  --max-sync-retries [n] Retries maximum n times (default to 3)" << std::endl;
     std::cout << "  --uplimit [n]          Limit the upload speed of files to n KB/s" << std::endl;
     std::cout << "  --downlimit [n]        Limit the download speed of files to n KB/s" << std::endl;
@@ -202,6 +202,7 @@ void help()
     std::cout << "  --path                 Path to a folder on a remote server" << std::endl;
     std::cout << "  --confdir [dir]        Use the given configuration directory" << std::endl;
     std::cout << "" << std::endl;
+#ifdef BUILD_GUI
     std::cout << "Account provisioning options (non-interactive setup):" << std::endl;
     std::cout << "  --userid [user]        The user ID to configure" << std::endl;
     std::cout << "  --apppassword [pass]   The app password for authentication (optional)" << std::endl;
@@ -210,6 +211,7 @@ void help()
     std::cout << "  --remotedirpath [path] Remote folder path to sync, default /" << std::endl;
     std::cout << "  --isvfsenabled [0|1]   Enable virtual files (1) or disable (0)" << std::endl;
     std::cout << "" << std::endl;
+#endif
 }
 
 void showVersion()
@@ -234,11 +236,15 @@ CommandMode parseOptions(const QStringList &app_args, CmdOptions *options)
 
     const auto argCount = args.count();
 
+#ifdef BUILD_GUI
     // Detect provisioning mode: --userid flag present means no positional args required
     const auto provisionMode = args.contains(QStringLiteral("--userid"));
     if (provisionMode) {
         result = CommandMode::ProvisioningMode;
     }
+#else
+    const auto provisionMode = false;
+#endif
 
     if (!provisionMode) {
         if (argCount < 3) {
@@ -316,7 +322,9 @@ CommandMode parseOptions(const QStringList &app_args, CmdOptions *options)
             options->remotePath = it.next();
         } else if (option == u"--confdir"_s && it.hasNext() && !it.peekNext().startsWith(u"--"_s)) {
             options->config_directory = it.next();
-        } else {
+        }
+#ifdef BUILD_GUI
+        else {
             QString errorMessage;
             if (!AccountSetupCommandLineManager::instance()->parseCommandlineOption(option, it, errorMessage)) {
                 help();
@@ -324,6 +332,13 @@ CommandMode parseOptions(const QStringList &app_args, CmdOptions *options)
                 return result;
             }
         }
+#else
+        else {
+            help();
+            result = CommandMode::HelpMode;
+            return result;
+        }
+#endif
     }
 
     if (!provisionMode && (options->target_url.isEmpty() || options->source_dir.isEmpty())) {
@@ -357,15 +372,15 @@ void selectiveSyncFixup(OCC::SyncJournalDb *journal, const QStringList &newList)
     }
 }
 
+#ifdef BUILD_GUI
 [[nodiscard]] bool setupAccountsOnly()
 {
     auto result = false;
 
     ConfigFile cfg;
-    const auto tryMigrate = cfg.overrideServerUrl().isEmpty();
+    const auto tryMigrate = !cfg.hasUserOverrideServerUrl();
     auto accountsRestoreResult = AccountManager::AccountsRestoreFailure;
-    if (accountsRestoreResult = AccountManager::instance()->restore(tryMigrate);
-        accountsRestoreResult == AccountManager::AccountsRestoreFailure) {
+    if (accountsRestoreResult = AccountManager::instance()->restore(tryMigrate); accountsRestoreResult == AccountManager::AccountsRestoreFailure) {
         qWarning() << "restoring existing user accounts failed";
         return result;
     }
@@ -405,6 +420,7 @@ void selectiveSyncFixup(OCC::SyncJournalDb *journal, const QStringList &newList)
     result = true;
     return result;
 }
+#endif // BUILD_GUI
 
 int main(int argc, char **argv)
 {
@@ -447,6 +463,7 @@ int main(int argc, char **argv)
         }
     }
 
+#ifdef BUILD_GUI
     if (commandMode == CommandMode::ProvisioningMode) {
         if (!setupAccountsAndFolders()) {
             qWarning() << "Restoring existing accounts failed. Skip creation of a new account. See prior messages for a detailed error.";
@@ -470,6 +487,7 @@ int main(int argc, char **argv)
         // event loop with the exit code once it has finished.
         return app.exec();
     }
+#endif // BUILD_GUI
 
     AccountPtr account = Account::create();
 
@@ -478,9 +496,7 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    const auto sanitisedTargetUrl = options.target_url.endsWith('/') || options.target_url.endsWith('\\') 
-        ? options.target_url.chopped(1) 
-        : options.target_url;
+    const auto sanitisedTargetUrl = options.target_url.endsWith('/') || options.target_url.endsWith('\\') ? options.target_url.chopped(1) : options.target_url;
     QUrl hostUrl = QUrl::fromUserInput(sanitisedTargetUrl);
 
     if (const auto hostUrlPath = hostUrl.path(); hostUrlPath.contains("/webdav", Qt::CaseInsensitive) || hostUrlPath.contains("/dav", Qt::CaseInsensitive)) {
@@ -535,7 +551,6 @@ int main(int argc, char **argv)
             password = QString::fromUtf8(qgetenv("NC_PASSWORD"));
         }
     }
-   
 
     // Find the folder and the original owncloud url
 
@@ -611,8 +626,8 @@ int main(int argc, char **argv)
     csjob->start();
     loop.exec();
 
-    if (csjob->reply()->error() != QNetworkReply::NoError){
-        std::cout<<"Error connecting to server for status\n";
+    if (csjob->reply()->error() != QNetworkReply::NoError) {
+        std::cout << "Error connecting to server for status\n";
         return EXIT_FAILURE;
     }
 
@@ -631,8 +646,8 @@ int main(int argc, char **argv)
     job->start();
     loop.exec();
 
-    if (job->reply()->error() != QNetworkReply::NoError){
-        std::cout<<"Error connecting to server\n";
+    if (job->reply()->error() != QNetworkReply::NoError) {
+        std::cout << "Error connecting to server\n";
         return EXIT_FAILURE;
     }
 
@@ -686,12 +701,13 @@ restart_sync:
     SyncEngine engine(account, options.source_dir, syncOptions, folder, &db);
     engine.setIgnoreHiddenFiles(options.ignoreHiddenFiles);
     engine.setNetworkLimits(options.uplimit, options.downlimit);
-    QObject::connect(&engine, &SyncEngine::finished,
-        [&app](bool result) { app.exit(result ? EXIT_SUCCESS : EXIT_FAILURE); });
+    QObject::connect(&engine, &SyncEngine::finished, [&app](bool result) {
+        app.exit(result ? EXIT_SUCCESS : EXIT_FAILURE);
+    });
     QObject::connect(&engine, &SyncEngine::transmissionProgress, &cmd, &Cmd::transmissionProgressSlot);
-    QObject::connect(&engine, &SyncEngine::syncError,
-        [](const QString &error) { qWarning() << "Sync error:" << error; });
-
+    QObject::connect(&engine, &SyncEngine::syncError, [](const QString &error) {
+        qWarning() << "Sync error:" << error;
+    });
 
     // Exclude lists
 
@@ -734,7 +750,6 @@ restart_sync:
         qFatal("Cannot load system exclude list or list supplied via --exclude/--exclude-anchored");
         return EXIT_FAILURE;
     }
-
 
     // Have to be done async, else, an error before exec() does not terminate the event loop.
     QMetaObject::invokeMethod(&engine, "startSync", Qt::QueuedConnection);

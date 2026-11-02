@@ -30,7 +30,8 @@
 
 #include <deque>
 
-namespace OCC {
+namespace OCC
+{
 
 Q_DECLARE_LOGGING_CATEGORY(lcPropagator)
 
@@ -69,7 +70,7 @@ public:
 
     enum AbortType {
         Synchronous,
-        Asynchronous
+        Asynchronous,
     };
 
     Q_ENUM(AbortType)
@@ -77,14 +78,13 @@ public:
     enum JobState {
         NotYetStarted,
         Running,
-        Finished
+        Finished,
     };
     JobState _state = NotYetStarted;
 
     Q_ENUM(JobState)
 
     enum JobParallelism {
-
         /** Jobs can be run in parallel to this job */
         FullParallelism,
 
@@ -96,19 +96,28 @@ public:
 
     Q_ENUM(JobParallelism)
 
-    [[nodiscard]] virtual JobParallelism parallelism() const { return FullParallelism; }
+    [[nodiscard]] virtual JobParallelism parallelism() const
+    {
+        return FullParallelism;
+    }
 
     /**
      * For "small" jobs
      */
-    virtual bool isLikelyFinishedQuickly() { return false; }
+    virtual bool isLikelyFinishedQuickly()
+    {
+        return false;
+    }
 
     /** The space that the running jobs need to complete but don't actually use yet.
      *
      * Note that this does *not* include the disk space that's already
      * in use by running jobs for things like a download-in-progress.
      */
-    [[nodiscard]] virtual qint64 committedDiskSpace() const { return 0; }
+    [[nodiscard]] virtual qint64 committedDiskSpace() const
+    {
+        return 0;
+    }
 
     /** Set the associated composite job
      *
@@ -116,14 +125,18 @@ public:
      * and from PropagateDirectory to associate the subJobs with the first
      * job.
      */
-    void setAssociatedComposite(PropagatorCompositeJob *job) { _associatedComposite = job; }
+    void setAssociatedComposite(PropagatorCompositeJob *job)
+    {
+        _associatedComposite = job;
+    }
 
 public Q_SLOTS:
     /*
      * Asynchronous abort requires emit of abortFinished() signal,
      * while synchronous is expected to abort immedietaly.
-    */
-    virtual void abort(OCC::PropagatorJob::AbortType abortType) {
+     */
+    virtual void abort(OCC::PropagatorJob::AbortType abortType)
+    {
         if (abortType == AbortType::Asynchronous) {
             Q_EMIT abortFinished();
         }
@@ -143,6 +156,7 @@ Q_SIGNALS:
      * Emitted when the abort is fully finished
      */
     void abortFinished(OCC::SyncFileItem::Status status = SyncFileItem::NormalError);
+
 protected:
     [[nodiscard]] OwncloudPropagator *propagator() const;
 
@@ -199,9 +213,9 @@ public:
         , _item(item)
     {
         // we should always execute jobs that process the E2EE API calls as sequential jobs
-        // TODO: In fact, we must make sure Lock/Unlock are not colliding and always wait for each other to complete. So, we could refactor this "_parallelism" later
-        // so every "PropagateItemJob" that will potentially execute Lock job on E2EE folder will get executed sequentially.
-        // As an alternative, we could optimize Lock/Unlock calls, so we do a batch-write on one folder and only lock and unlock a folder once per batch.
+        // TODO: In fact, we must make sure Lock/Unlock are not colliding and always wait for each other to complete. So, we could refactor this "_parallelism"
+        // later so every "PropagateItemJob" that will potentially execute Lock job on E2EE folder will get executed sequentially. As an alternative, we could
+        // optimize Lock/Unlock calls, so we do a batch-write on one folder and only lock and unlock a folder once per batch.
         _parallelism = (_item->isEncrypted() || hasEncryptedAncestor()) ? WaitForFinished : FullParallelism;
     }
     ~PropagateItemJob() override;
@@ -218,7 +232,10 @@ public:
         return true;
     }
 
-    [[nodiscard]] JobParallelism parallelism() const override { return _parallelism; }
+    [[nodiscard]] JobParallelism parallelism() const override
+    {
+        return _parallelism;
+    }
 
     SyncFileItemPtr _item;
 
@@ -272,12 +289,11 @@ public:
             _abortsCount = _runningJobs.size();
             for (const auto j : std::as_const(_runningJobs)) {
                 if (abortType == AbortType::Asynchronous) {
-                    connect(j, &PropagatorJob::abortFinished,
-                            this, &PropagatorCompositeJob::slotSubJobAbortFinished);
+                    connect(j, &PropagatorJob::abortFinished, this, &PropagatorCompositeJob::slotSubJobAbortFinished);
                 }
                 j->abort(abortType);
             }
-        } else if (abortType == AbortType::Asynchronous){
+        } else if (abortType == AbortType::Asynchronous) {
             Q_EMIT abortFinished();
         }
     }
@@ -336,7 +352,7 @@ public:
             _firstJob->abort(AbortType::Synchronous);
         }
 
-        if (abortType == AbortType::Asynchronous){
+        if (abortType == AbortType::Asynchronous) {
             connect(&_subJobs, &PropagatorCompositeJob::abortFinished, this, &PropagateDirectory::abortFinished);
         }
         _subJobs.abort(abortType);
@@ -347,7 +363,6 @@ public:
         _firstJob->_item->_affectedItems++;
     }
 
-
     [[nodiscard]] qint64 committedDiskSpace() const override
     {
         return _subJobs.committedDiskSpace();
@@ -357,7 +372,6 @@ private Q_SLOTS:
 
     void slotFirstJobFinished(OCC::SyncFileItem::Status status);
     virtual void slotSubJobsFinished(OCC::SyncFileItem::Status status);
-
 };
 
 /**
@@ -447,13 +461,13 @@ public:
     void start(SyncFileItemVector &&_syncedItems);
 
     void startDirectoryPropagation(const SyncFileItemPtr &item,
-                                   QStack<QPair<QString, PropagateDirectory*>> &directories,
+                                   QStack<QPair<QString, PropagateDirectory *>> &directories,
                                    QVector<PropagatorJob *> &directoriesToRemove,
                                    QString &removedDirectory,
                                    const SyncFileItemVector &items);
 
     void startFilePropagation(const SyncFileItemPtr &item,
-                              QStack<QPair<QString, PropagateDirectory*>> &directories,
+                              QStack<QPair<QString, PropagateDirectory *>> &directories,
                               QVector<PropagatorJob *> &directoriesToRemove,
                               QString &removedDirectory,
                               QString &maybeConflictDirectory);
@@ -529,6 +543,8 @@ public:
 
     [[nodiscard]] QString fullLocalPath(const QString &tmp_file_name) const;
     [[nodiscard]] QString localPath() const;
+    [[nodiscard]] bool localPathContainsSymlink(const QString &relativePath) const;
+    [[nodiscard]] static QString symlinkNotSupportedMessage();
 
     /**
      * Returns the full remote path including the folder root of a
@@ -561,8 +577,7 @@ public:
             connect(_rootJob.data(), &PropagateDirectory::abortFinished, this, &OwncloudPropagator::emitFinished);
 
             // Use Queued Connection because we're possibly already in an item's finished stack
-            QMetaObject::invokeMethod(_rootJob.data(), "abort", Qt::QueuedConnection,
-                                      Q_ARG(PropagatorJob::AbortType, PropagatorJob::AbortType::Asynchronous));
+            QMetaObject::invokeMethod(_rootJob.data(), "abort", Qt::QueuedConnection, Q_ARG(PropagatorJob::AbortType, PropagatorJob::AbortType::Asynchronous));
 
             // Give asynchronous abort 5000 msec to finish on its own
             QTimer::singleShot(5000, this, &OwncloudPropagator::abortTimeout);
@@ -577,7 +592,7 @@ public:
     enum DiskSpaceResult {
         DiskSpaceOk,
         DiskSpaceFailure,
-        DiskSpaceCritical
+        DiskSpaceCritical,
     };
 
     /** Checks whether there's enough disk space available to complete
@@ -594,8 +609,7 @@ public:
      *
      * Returns true on success, false and error on error.
      */
-    bool createConflict(const SyncFileItemPtr &item,
-        PropagatorCompositeJob *composite, QString *error);
+    bool createConflict(const SyncFileItemPtr &item, PropagatorCompositeJob *composite, QString *error);
 
     /** Handles a case clash conflict by renaming the file 'item'.
      *
@@ -625,15 +639,12 @@ public:
      *
      * Will also trigger a Vfs::convertToPlaceholder.
      */
-    static Result<Vfs::ConvertToPlaceholderResult, QString> staticUpdateMetadata(const SyncFileItem &item,
-                                                                                 const QString localDir,
-                                                                                 Vfs *vfs,
-                                                                                 SyncJournalDb * const journal,
-                                                                                 Vfs::UpdateMetadataTypes updateType);
+    static Result<Vfs::ConvertToPlaceholderResult, QString>
+    staticUpdateMetadata(const SyncFileItem &item, const QString localDir, Vfs *vfs, SyncJournalDb *const journal, Vfs::UpdateMetadataTypes updateType);
 
     [[nodiscard]] bool isDelayedUploadItem(const SyncFileItemPtr &item) const;
 
-    [[nodiscard]] const std::deque<SyncFileItemPtr>& delayedTasks() const
+    [[nodiscard]] const std::deque<SyncFileItemPtr> &delayedTasks() const
     {
         return _delayedTasks;
     }
@@ -716,8 +727,7 @@ Q_SIGNALS:
     void insufficientRemoteStorage();
 
 private:
-    std::unique_ptr<PropagateUploadFileCommon> createUploadJob(SyncFileItemPtr item,
-                                                               bool deleteExisting);
+    std::unique_ptr<PropagateUploadFileCommon> createUploadJob(SyncFileItemPtr item, bool deleteExisting);
 
     void pushDelayedUploadTask(SyncFileItemPtr item);
 
@@ -741,7 +751,6 @@ private:
     static bool _allowDelayedUpload;
 };
 
-
 /**
  * @brief Job that wait for all the poll jobs to be completed
  * @ingroup libsync
@@ -756,11 +765,7 @@ class CleanupPollsJob : public QObject
     QSharedPointer<Vfs> _vfs;
 
 public:
-    explicit CleanupPollsJob(AccountPtr account,
-                             SyncJournalDb *journal,
-                             const QString &localPath,
-                             const QSharedPointer<Vfs> &vfs,
-                             QObject *parent = nullptr)
+    explicit CleanupPollsJob(AccountPtr account, SyncJournalDb *journal, const QString &localPath, const QSharedPointer<Vfs> &vfs, QObject *parent = nullptr)
         : QObject(parent)
         , _pollInfos(journal->getPollInfos())
         , _account(account)

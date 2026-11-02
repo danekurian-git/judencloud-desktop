@@ -9,7 +9,8 @@
 #include <QLoggingCategory>
 #include <QBuffer>
 
-namespace {
+namespace
+{
 Q_LOGGING_CATEGORY(lcNetworkHttp, "sync.httplogger", QtWarningMsg)
 
 const qint64 PeekSize = 1024 * 1024;
@@ -25,7 +26,12 @@ bool isTextBody(const QString &s)
     return regexp.match(s).hasMatch();
 }
 
-void logHttp(const QByteArray &verb, const QString &url, const QByteArray &id, const QString &contentType, const QList<QNetworkReply::RawHeaderPair> &header, QIODevice *device)
+void logHttp(const QByteArray &verb,
+             const QString &url,
+             const QByteArray &id,
+             const QString &contentType,
+             const QList<QNetworkReply::RawHeaderPair> &header,
+             QIODevice *device)
 {
     const auto reply = qobject_cast<QNetworkReply *>(device);
     const auto contentLength = device ? device->size() : 0;
@@ -62,8 +68,7 @@ void logHttp(const QByteArray &verb, const QString &url, const QByteArray &id, c
             }
             Q_ASSERT(device->pos() == 0);
             stream << device->peek(PeekSize);
-            if (PeekSize < contentLength)
-            {
+            if (PeekSize < contentLength) {
                 stream << "...(" << (contentLength - PeekSize) << "bytes elided)";
             }
         } else {
@@ -75,8 +80,8 @@ void logHttp(const QByteArray &verb, const QString &url, const QByteArray &id, c
 }
 }
 
-
-namespace OCC {
+namespace OCC
+{
 
 void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operation operation, QIODevice *device)
 {
@@ -95,11 +100,11 @@ void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operati
         header << qMakePair(key, request.rawHeader(key));
     }
     logHttp(requestVerb(operation, request),
-        request.url().toString(),
-        request.rawHeader(XRequestId()),
-        request.header(QNetworkRequest::ContentTypeHeader).toString(),
-        header,
-        device);
+            request.url().toString(),
+            request.rawHeader(XRequestId()),
+            request.header(QNetworkRequest::ContentTypeHeader).toString(),
+            header,
+            device);
 
     QObject::connect(reply, &QNetworkReply::finished, reply, [reply] {
         logHttp(requestVerb(*reply),

@@ -26,7 +26,8 @@
 class QThread;
 class QSettings;
 
-namespace OCC {
+namespace OCC
+{
 
 class Vfs;
 class SyncEngine;
@@ -36,7 +37,8 @@ class FolderWatcher;
 class LocalDiscoveryTracker;
 
 #ifdef Q_OS_MACOS
-namespace Utility {
+namespace Utility
+{
 class MacSandboxPersistentAccess;
 }
 #endif
@@ -79,8 +81,7 @@ public:
     static void save(QSettings &settings, const FolderDefinition &folder);
 
     /// Reads a folder definition from the current settings group.
-    static bool load(QSettings &settings, const QString &alias,
-        FolderDefinition *folder);
+    static bool load(QSettings &settings, const QString &alias, FolderDefinition *folder);
 
     /** The highest version in the settings that load() can read
      *
@@ -91,7 +92,10 @@ public:
      * Version 5: available in oC client 4.0.0 and 4.2.0
      * Version 13: available in oC client 5.2.0 and 5.3.1
      */
-    static int maxSettingsVersion() { return 13; }
+    static int maxSettingsVersion()
+    {
+        return 13;
+    }
 
     /// Ensure / as separator and trailing /.
     static QString prepareLocalPath(const QString &path);
@@ -117,7 +121,7 @@ class Folder : public QObject
 public:
     enum class ChangeReason {
         Other,
-        UnLock
+        UnLock,
     };
     Q_ENUM(ChangeReason)
 
@@ -133,7 +137,10 @@ public:
     /**
      * The account the folder is configured on.
      */
-    [[nodiscard]] AccountState *accountState() const { return _accountState.data(); }
+    [[nodiscard]] AccountState *accountState() const
+    {
+        return _accountState.data();
+    }
 
     /**
      * alias or nickname
@@ -182,12 +189,18 @@ public:
      * Similar to `QDir(path()).filePath(...)`, except file names like "Z:test"
      * are treated as relative paths on Windows.
      */
-    [[nodiscard]] QString filePath(const QString& fileName);
+    [[nodiscard]] QString filePath(const QString &fileName);
 
     [[nodiscard]] QString fulllRemotePathToPathInSyncJournalDb(const QString &fullRemotePath) const;
 
-    void setNavigationPaneClsid(const QUuid &clsid) { _definition.navigationPaneClsid = clsid; }
-    [[nodiscard]] QUuid navigationPaneClsid() const { return _definition.navigationPaneClsid; }
+    void setNavigationPaneClsid(const QUuid &clsid)
+    {
+        _definition.navigationPaneClsid = clsid;
+    }
+    [[nodiscard]] QUuid navigationPaneClsid() const
+    {
+        return _definition.navigationPaneClsid;
+    }
 
     /**
      * remote folder path with server url
@@ -225,12 +238,12 @@ public:
     [[nodiscard]] SyncResult syncResult() const;
 
     /**
-      * This is called when the sync folder definition is removed. Do cleanups here.
-      *
-      * It removes the database, among other things.
-      *
-      * The folder is not in a valid state afterwards!
-      */
+     * This is called when the sync folder definition is removed. Do cleanups here.
+     *
+     * It removes the database, among other things.
+     *
+     * The folder is not in a valid state afterwards!
+     */
     virtual void wipeForRemoval();
 
     void setSyncState(SyncResult::Status state);
@@ -238,23 +251,47 @@ public:
     void setDirtyNetworkLimits();
 
     /**
-      * Ignore syncing of hidden files or not. This is defined in the
-      * folder definition
-      */
+     * Ignore syncing of hidden files or not. This is defined in the
+     * folder definition
+     */
     [[nodiscard]] bool ignoreHiddenFiles();
     void setIgnoreHiddenFiles(bool ignore);
 
     // Used by the Socket API
-    [[nodiscard]] SyncJournalDb *journalDb() const { return &_journal; }
-    [[nodiscard]] SyncEngine &syncEngine() const { return *_engine; }
-    [[nodiscard]] Vfs &vfs() const { return *_vfs; }
+    [[nodiscard]] SyncJournalDb *journalDb() const
+    {
+        return &_journal;
+    }
+    [[nodiscard]] SyncEngine &syncEngine() const
+    {
+        return *_engine;
+    }
+    [[nodiscard]] Vfs &vfs() const
+    {
+        return *_vfs;
+    }
     [[nodiscard]] bool ensureVfsReady();
 
-    [[nodiscard]] RequestEtagJob *etagJob() const { return _requestEtagJob; }
-    [[nodiscard]] std::chrono::milliseconds msecSinceLastSync() const { return std::chrono::milliseconds(_timeSinceLastSyncDone.elapsed()); }
-    [[nodiscard]] std::chrono::milliseconds msecLastSyncDuration() const { return _lastSyncDuration; }
-    [[nodiscard]] int consecutiveFollowUpSyncs() const { return _consecutiveFollowUpSyncs; }
-    [[nodiscard]] int consecutiveFailingSyncs() const { return _consecutiveFailingSyncs; }
+    [[nodiscard]] RequestEtagJob *etagJob() const
+    {
+        return _requestEtagJob;
+    }
+    [[nodiscard]] std::chrono::milliseconds msecSinceLastSync() const
+    {
+        return std::chrono::milliseconds(_timeSinceLastSyncDone.elapsed());
+    }
+    [[nodiscard]] std::chrono::milliseconds msecLastSyncDuration() const
+    {
+        return _lastSyncDuration;
+    }
+    [[nodiscard]] int consecutiveFollowUpSyncs() const
+    {
+        return _consecutiveFollowUpSyncs;
+    }
+    [[nodiscard]] int consecutiveFailingSyncs() const
+    {
+        return _consecutiveFailingSyncs;
+    }
 
     /// Saves the folder data in the account's settings.
     void saveToSettings() const;
@@ -265,24 +302,24 @@ public:
     [[nodiscard]] bool pathIsIgnored(const QString &path) const;
 
     /**
-      * Returns whether a file inside this folder should be excluded.
-      */
+     * Returns whether a file inside this folder should be excluded.
+     */
     [[nodiscard]] bool isFileExcludedAbsolute(const QString &fullPath) const;
 
     /**
-      * Returns whether a file inside this folder should be excluded.
-      */
+     * Returns whether a file inside this folder should be excluded.
+     */
     [[nodiscard]] bool isFileExcludedRelative(const QString &relativePath) const;
 
     /** Calls schedules this folder on the FolderMan after a short delay.
-      *
-      * This should be used in situations where a sync should be triggered
-      * because a local file was modified. Syncs don't upload files that were
-      * modified too recently, and this delay ensures the modification is
-      * far enough in the past.
-      *
-      * The delay resets with subsequent calls.
-      */
+     *
+     * This should be used in situations where a sync should be triggered
+     * because a local file was modified. Syncs don't upload files that were
+     * modified too recently, and this delay ensures the modification is
+     * far enough in the past.
+     *
+     * The delay resets with subsequent calls.
+     */
     void scheduleThisFolderSoon();
 
     void acceptInvalidFileName(const QString &filePath);
@@ -290,13 +327,16 @@ public:
     void acceptCaseClashConflictFileName(const QString &filePath);
 
     /**
-      * Migration: When this flag is true, this folder will save to
-      * the backwards-compatible 'Folders' section in the config file.
-      */
+     * Migration: When this flag is true, this folder will save to
+     * the backwards-compatible 'Folders' section in the config file.
+     */
     void setSaveBackwardsCompatible(bool save);
 
     /** Used to have placeholders: save in placeholder config section */
-    void setSaveInFoldersWithPlaceholders() { _saveInFoldersWithPlaceholders = true; }
+    void setSaveInFoldersWithPlaceholders()
+    {
+        _saveInFoldersWithPlaceholders = true;
+    }
 
     /**
      * Sets up this folder's folderWatcher if possible.
@@ -319,6 +359,11 @@ public:
     void setSecurityScopedAccess(std::unique_ptr<Utility::MacSandboxPersistentAccess> access);
 
     /**
+     * Whether the folder holds security-scoped access to its local path.
+     */
+    [[nodiscard]] bool hasSecurityScopedAccess() const;
+
+    /**
      * Whether this folder needs the user to re-approve access for macOS sandbox.
      *
      * True when the folder was loaded from settings without valid security-scoped
@@ -339,8 +384,7 @@ public:
      * Stores the bookmark data, sets the persistent access handle, clears the
      * needsSandboxBookmark flag, un-pauses the folder, and persists to settings.
      */
-    void applySandboxBookmark(const QByteArray &bookmarkData,
-                              std::unique_ptr<Utility::MacSandboxPersistentAccess> access);
+    void applySandboxBookmark(const QByteArray &bookmarkData, std::unique_ptr<Utility::MacSandboxPersistentAccess> access);
 #endif
 
     /** virtual files of some kind are enabled
@@ -355,8 +399,14 @@ public:
     void setRootPinState(PinState state);
 
     /** Whether user desires a switch that couldn't be executed yet, see member */
-    [[nodiscard]] bool isVfsOnOffSwitchPending() const { return _vfsOnOffPending; }
-    void setVfsOnOffSwitchPending(bool pending) { _vfsOnOffPending = pending; }
+    [[nodiscard]] bool isVfsOnOffSwitchPending() const
+    {
+        return _vfsOnOffPending;
+    }
+    void setVfsOnOffSwitchPending(bool pending)
+    {
+        _vfsOnOffPending = pending;
+    }
 
     void switchToVirtualFiles();
 
@@ -372,7 +422,7 @@ public:
     void migrateBlackListPath(const QString &legacyPath);
 
     /// whether the current folder contains any of the passed fileIds
-    [[nodiscard]] bool hasFileIds(const QList<qint64>& fileIds) const;
+    [[nodiscard]] bool hasFileIds(const QList<qint64> &fileIds) const;
 
 Q_SIGNALS:
     void syncStateChange();
@@ -392,18 +442,18 @@ Q_SIGNALS:
 public Q_SLOTS:
 
     /**
-       * terminate the current sync run
-       */
+     * terminate the current sync run
+     */
     void slotTerminateSync();
 
     // connected to the corresponding signals in the SyncEngine
     void slotAboutToRemoveAllFiles(OCC::SyncFileItem::Direction, std::function<void(bool)> callback);
 
     /**
-      * Starts a sync operation
-      *
-      * If the list of changed files is known, it is passed.
-      */
+     * Starts a sync operation
+     *
+     * If the list of changed files is known, it is passed.
+     */
     void startSync(const QStringList &pathList = QStringList());
 
     int slotDiscardDownloadProgress();
@@ -412,15 +462,15 @@ public Q_SLOTS:
     [[nodiscard]] int errorBlackListEntryCount();
 
     /**
-       * Triggered by the folder watcher when a file/dir in this folder
-       * changes. Needs to check whether this change should trigger a new
-       * sync run to be scheduled.
-       */
+     * Triggered by the folder watcher when a file/dir in this folder
+     * changes. Needs to check whether this change should trigger a new
+     * sync run to be scheduled.
+     */
     void slotWatchedPathChanged(const QStringView &path, const OCC::Folder::ChangeReason reason);
 
     /*
-    * Triggered when lock files were removed
-    */
+     * Triggered when lock files were removed
+     */
     void slotFilesLockReleased(const QSet<QString> &files);
 
     /*
@@ -540,7 +590,7 @@ private:
 
     bool checkAdoptedBackingPath();
 
-    SyncOptions initializeSyncOptions() const;
+    [[nodiscard]] SyncOptions initializeSyncOptions() const;
 
     enum LogStatus {
         LogStatusRemove,
@@ -550,11 +600,10 @@ private:
         LogStatusError,
         LogStatusConflict,
         LogStatusUpdated,
-        LogStatusFileLocked
+        LogStatusFileLocked,
     };
 
-    void createGuiLog(const QString &filename, LogStatus status, int count,
-        const QString &renameTarget = QString());
+    void createGuiLog(const QString &filename, LogStatus status, int count, const QString &renameTarget = QString());
 
     void startVfs();
 

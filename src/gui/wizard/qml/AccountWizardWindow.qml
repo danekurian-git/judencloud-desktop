@@ -16,13 +16,13 @@ WizardStyledWindow {
 
     required property QtObject controller
     property bool controllerFinished: false
-    readonly property int compactHeight: Style.accountWizardCompactHeight
+    readonly property int compactHeight: Style.compactDialogHeight
     readonly property int syncOptionsHeight: Style.accountWizardSyncOptionsHeight
 
     minimizable: true
-    width: Style.accountWizardWindowWidth
+    width: Style.accountWizardWidth
     height: compactHeight
-    minimumWidth: Style.accountWizardWindowWidth
+    minimumWidth: Style.accountWizardWidth
     minimumHeight: compactHeight
     title: controller && controller.privateCloudMode ? controller.appName : ""
     function defaultHeightForCurrentStep() {
@@ -282,15 +282,18 @@ WizardStyledWindow {
                     && !root.controller.privateCloudMode
                     && root.controller.hasAdvancedOptions
                 enabled: root.controller && !root.controller.busy
-                text: qsTr("Advanced")
+                //: Name of the Advanced settings feature.
+                text: qsTranslate("OCC::AdvancedSettings", "Advanced")
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
                 onClicked: root.controller.openAdvancedOptions()
             },
 
             WizardButton {
-                visible: root.controller && root.controller.currentStep === AccountWizardController.ServerStep
+                visible: root.controller
+                    && root.controller.currentStep === AccountWizardController.ServerStep
                     && !root.controller.privateCloudMode
+                    && !Theme.wizardHideSignupButton
                 enabled: root.controller && !root.controller.busy
                 text: qsTr("Sign up")
                 textSuffix: "\u2197"
@@ -300,8 +303,10 @@ WizardStyledWindow {
             },
 
             WizardButton {
-                visible: root.controller && root.controller.currentStep === AccountWizardController.ServerStep
+                visible: root.controller
+                    && root.controller.currentStep === AccountWizardController.ServerStep
                     && !root.controller.privateCloudMode
+                    && !Theme.wizardHideSelfHostButton
                 enabled: root.controller && !root.controller.busy
                 text: qsTr("Self-host")
                 textSuffix: "\u2197"

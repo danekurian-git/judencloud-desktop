@@ -6,6 +6,7 @@
 
 #include "capabilities.h"
 #include "configfile.h"
+#include "settings/servermanagedsettings.h"
 
 #include <QVariantMap>
 #include <QLoggingCategory>
@@ -18,7 +19,6 @@ using namespace Qt::StringLiterals;
 namespace OCC {
 
 Q_LOGGING_CATEGORY(lcServerCapabilities, "nextcloud.sync.server.capabilities", QtInfoMsg)
-
 
 Capabilities::Capabilities(const QVariantMap &capabilities)
     : _capabilities(capabilities)
@@ -102,6 +102,11 @@ int Capabilities::shareDefaultPermissions() const
     }
     
     return {};
+}
+
+bool Capabilities::unifiedSharingAvailable() const
+{
+    return _capabilities.contains("sharing"_L1);
 }
 
 bool Capabilities::clientSideEncryptionAvailable() const
@@ -360,9 +365,10 @@ bool Capabilities::chunkingParallelUploadDisabled() const
     return _capabilities["dav"].toMap()["chunkingParallelUploadDisabled"].toBool();
 }
 
-bool Capabilities::privateLinkPropertyAvailable() const
+QString Capabilities::globalScaleToken() const
 {
-    return _capabilities["files"].toMap()["privateLinks"].toBool();
+    const auto token = _capabilities.value(u"globalscale"_s).toMap().value(u"token"_s);
+    return token.metaType().id() == QMetaType::QString ? token.toString() : QString{};
 }
 
 QList<int> Capabilities::httpErrorCodesThatResetFailingChunkedUploads() const
@@ -404,6 +410,12 @@ bool Capabilities::serverHasValidSubscription() const
 QString Capabilities::desktopEnterpriseChannel() const
 {
     return _capabilities[QStringLiteral("support")].toMap().value(QStringLiteral("desktopEnterpriseChannel"), ConfigFile().defaultUpdateChannel()).toString();
+}
+
+ServerManagedSettings Capabilities::desktopClientManagedSettings() const
+{
+    const auto desktopClient = _capabilities[QStringLiteral("support")].toMap().value(QStringLiteral("desktopClient")).toMap();
+    return parseServerManagedSettings(desktopClient);
 }
 
 QStringList Capabilities::blacklistedFiles() const

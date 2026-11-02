@@ -21,7 +21,8 @@
 #include <QDBusConnection>
 #endif
 
-namespace OCC {
+namespace OCC
+{
 
 class Folder;
 
@@ -49,7 +50,10 @@ public:
     bool checkAccountExists(bool openSettings);
 
     static void raiseDialog(QWidget *raiseWidget);
-    static QSize settingsDialogSize() { return {720, 500}; }
+    static QSize settingsDialogSize()
+    {
+        return {720, 500};
+    }
     void setupOverlayIcons();
 #ifdef WITH_LIBCLOUDPROVIDERS
     void setupCloudProviders();
@@ -88,8 +92,7 @@ public Q_SLOTS:
     void slotHelp();
     void slotOpenPath(const QString &path);
     void slotTrayMessageIfServerUnsupported(const OCC::AccountPtr &account);
-    void slotNeedToAcceptTermsOfService(const OCC::AccountPtr &account,
-                                        OCC::AccountState::State state);
+    void slotNeedToAcceptTermsOfService(const OCC::AccountPtr &account, OCC::AccountState::State state);
 
     /**
      * Open a share dialog for a file or folder.
@@ -97,10 +100,8 @@ public Q_SLOTS:
      * localPath is the absolute local path to it (so not relative
      * to the folder).
      */
-    void slotShowShareDialog(const QString &localPath) const;
-    void slotShowGovernanceLabelsDialog(AccountPtr account,
-                                        const QString &localPath,
-                                        const QString &fileId) const;
+    void slotShowShareDialog(const QString &localPath, const QString &fileId) const;
+    void slotShowGovernanceLabelsDialog(AccountPtr account, const QString &localPath, const QString &fileId) const;
     void slotShowFileActivityDialog(const QString &localPath) const;
     void slotShowFileActionsDialog(const QString &localPath) const;
     void slotResolveConflict(const QString &conflictedPath, const QString &basePath, const QString &baseName, const QString &folderAlias) const;
@@ -109,9 +110,7 @@ public Q_SLOTS:
     /**
      * @brief Open an item's web page in the user's browser on behalf of the macOS file provider extension.
      *
-     * Resolves the per-item private link via `fetchPrivateLinkUrl` (PROPFIND for
-     * the server-side `privatelink` property, falling back to the deprecated link
-     * built from the numeric file id) and opens it via `Utility::openBrowser`.
+     * Builds the internal link from the numeric file ID and account capabilities and opens it via `Utility::openBrowser`.
      * Mirrors the classic-sync entry exposed by `SocketApi::command_OPEN_PRIVATE_LINK`.
      * See nextcloud/desktop#10025.
      *
@@ -124,9 +123,7 @@ public Q_SLOTS:
     /**
      * @brief Copy an item's Nextcloud internal link to the clipboard on behalf of the macOS file provider extension.
      *
-     * Resolves the per-item private link via `fetchPrivateLinkUrl` (PROPFIND for
-     * the server-side `privatelink` property, falling back to the deprecated link
-     * built from the numeric file id) and writes it to `QGuiApplication::clipboard()`.
+     * Builds the internal link from the numeric file ID and account capabilities and writes it to `QGuiApplication::clipboard()`.
      * Surfaces a notification through the existing systray afterwards. Mirrors
      * the classic-sync entry exposed by `SocketApi::command_COPY_PRIVATE_LINK`.
      * See nextcloud/desktop#10024.
@@ -155,7 +152,6 @@ private:
     QAction *_actionNewAccountWizard = nullptr;
     QAction *_actionSettings = nullptr;
     QAction *_actionEstimate = nullptr;
-
 
     QList<QAction *> _recentItemsActions;
     Application *_app;

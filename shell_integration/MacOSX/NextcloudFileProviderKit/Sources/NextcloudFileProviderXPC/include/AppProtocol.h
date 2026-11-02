@@ -24,19 +24,30 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)presentFileActions:(NSString *)fileId path:(NSString *)path remoteItemPath:(NSString *)remoteItemPath withDomainIdentifier:(NSString *)domainIdentifier;
 
 /**
+ * @brief The file provider extension asks the main app to present the unified sharing dialog for an item.
+ * @param fileId The numeric server file id, equal to the WebDAV `fileid` property.
+ * @param localPath The local and absolute path of the item.
+ * @param remoteItemPath The server-side path of the item.
+ * @param domainIdentifier The file provider domain identifier for the account that owns the item.
+ */
+- (void)presentUnifiedSharingForItem:(NSString *)fileId
+                          localPath:(NSString *)localPath
+                     remoteItemPath:(NSString *)remoteItemPath
+                forDomainIdentifier:(NSString *)domainIdentifier
+    NS_SWIFT_NAME(presentUnifiedSharing(forItem:localPath:remoteItemPath:forDomainIdentifier:));
+
+/**
  * @brief The file provider extension asks the main app to open the item's page in the user's web browser.
  *
- * The main app resolves the per-item private link via PROPFIND (with the
- * server's deprecated link as a fallback) and hands it to the platform browser.
+ * The main app builds the internal link from the numeric file ID and account
+ * capabilities and hands it to the platform browser.
  * This mirrors the classic-sync "Open in browser" entry exposed via
  * `SocketApi::command_OPEN_PRIVATE_LINK`. See nextcloud/desktop#10025.
  *
  * @param fileId The **numeric** server file id, equal to the WebDAV `fileid` property.
  *               This is NOT the ocId — naming differs from `presentFileActions:...`
- *               on purpose because `fetchPrivateLinkUrl` requires the numeric id
- *               for the deprecated fallback URL.
- * @param remoteItemPath The server-side path of the item, used to issue the
- *                       PROPFIND that resolves the per-item private link.
+ *               because internal links use the numeric ID.
+ * @param remoteItemPath The server-side path of the item, retained for XPC compatibility.
  * @param domainIdentifier The file provider domain identifier for the account that owns the item.
  */
 - (void)openItemInBrowser:(NSString *)fileId
@@ -45,22 +56,20 @@ NS_ASSUME_NONNULL_BEGIN
     NS_SWIFT_NAME(openItemInBrowser(_:remoteItemPath:forDomainIdentifier:));
 
 /**
- * @brief The file provider extension asks the main app to fetch the internal link for the given item and write it to the user's pasteboard.
+ * @brief The file provider extension asks the main app to build the internal link for the given item and write it to the user's pasteboard.
  *
  * The extension itself cannot write to NSPasteboard because of its sandbox profile
- * (see FileProviderExt.entitlements). The main app resolves the per-item private
- * link via PROPFIND (with the deprecated link built from the numeric file id as
- * fallback) and writes it to `QGuiApplication::clipboard()`. On success it also
+ * (see FileProviderExt.entitlements). The main app builds the internal link from
+ * the numeric file ID and account capabilities and writes it to
+ * `QGuiApplication::clipboard()`. On success it also
  * surfaces a system notification through the existing systray. Mirrors the
  * classic-sync "Copy internal link" entry exposed via
  * `SocketApi::command_COPY_PRIVATE_LINK`. See nextcloud/desktop#10024.
  *
  * @param fileId The **numeric** server file id, equal to the WebDAV `fileid` property.
  *               This is NOT the ocId — naming differs from `presentFileActions:...`
- *               on purpose because `fetchPrivateLinkUrl` requires the numeric id
- *               for the deprecated fallback URL.
- * @param remoteItemPath The server-side path of the item, used to issue the
- *                       PROPFIND that resolves the per-item private link.
+ *               because internal links use the numeric ID.
+ * @param remoteItemPath The server-side path of the item, retained for XPC compatibility.
  * @param domainIdentifier The file provider domain identifier for the account that owns the item.
  */
 - (void)copyInternalLinkForItem:(NSString *)fileId
@@ -76,7 +85,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)reportSyncStatus:(NSString *)status forDomainIdentifier:(NSString *)domainIdentifier;
 
 /**
- * @brief The file provider extension reports an item it refused to sync because that kind of item isn't supported yet (currently: macOS bundles).
+ * @brief The file provider extension reports an item it excluded from synchronization.
  *
  * The main app surfaces the message in its activity view in the systray's tray window — the same place the classic sync engine reports excluded items.
  *
@@ -120,4 +129,3 @@ NS_ASSUME_NONNULL_BEGIN
 
 NS_ASSUME_NONNULL_END
 #endif /* AppProtocol_h */
-

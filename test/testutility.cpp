@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2013 ownCloud, Inc.
  * SPDX-License-Identifier: CC0-1.0
- * 
+ *
  * This software is in the public domain, furnished "as is", without technical
  * support, and with no warranty, express or implied, as to its usefulness for
  * any purpose.
@@ -26,7 +26,8 @@ OCSYNC_EXPORT extern std::function<Utility::LocalStorageType(const QString &)> l
 
 using namespace OCC::Utility;
 
-namespace OCC {
+namespace OCC
+{
 OCSYNC_EXPORT extern bool fsCasePreserving_override;
 #ifdef Q_OS_WIN
 OCSYNC_EXPORT Utility::LocalStorageType classifyLocalStorage(UINT driveType, STORAGE_BUS_TYPE busType, bool removableMedia, bool hotplugDevice);
@@ -97,36 +98,35 @@ private Q_SLOTS:
 
     void testFormatFingerprint()
     {
-        QVERIFY2(formatFingerprint("68ac906495480a3404beee4874ed853a037a7a8f")
-                 == "68:ac:90:64:95:48:0a:34:04:be:ee:48:74:ed:85:3a:03:7a:7a:8f",
-		"Utility::formatFingerprint() is broken");
+        QVERIFY2(formatFingerprint("68ac906495480a3404beee4874ed853a037a7a8f") == "68:ac:90:64:95:48:0a:34:04:be:ee:48:74:ed:85:3a:03:7a:7a:8f",
+                 "Utility::formatFingerprint() is broken");
     }
     void testOctetsToString()
     {
         QLocale::setDefault(QLocale("en"));
-        QCOMPARE(octetsToString(999) , QStringLiteral("999 B"));
-        QCOMPARE(octetsToString(1024) , QStringLiteral("1 KB"));
-        QCOMPARE(octetsToString(1110) , QStringLiteral("1 KB"));
-        QCOMPARE(octetsToString(1364) , QStringLiteral("1 KB"));
+        QCOMPARE(octetsToString(999), QStringLiteral("999 B"));
+        QCOMPARE(octetsToString(1024), QStringLiteral("1 KB"));
+        QCOMPARE(octetsToString(1110), QStringLiteral("1 KB"));
+        QCOMPARE(octetsToString(1364), QStringLiteral("1 KB"));
 
-        QCOMPARE(octetsToString(9110) , QStringLiteral("9 KB"));
-        QCOMPARE(octetsToString(9910) , QStringLiteral("10 KB"));
-        QCOMPARE(octetsToString(9999) , QStringLiteral("10 KB"));
-        QCOMPARE(octetsToString(10240) , QStringLiteral("10 KB"));
+        QCOMPARE(octetsToString(9110), QStringLiteral("9 KB"));
+        QCOMPARE(octetsToString(9910), QStringLiteral("10 KB"));
+        QCOMPARE(octetsToString(9999), QStringLiteral("10 KB"));
+        QCOMPARE(octetsToString(10240), QStringLiteral("10 KB"));
 
-        QCOMPARE(octetsToString(123456) , QStringLiteral("121 KB"));
-        QCOMPARE(octetsToString(1234567) , QStringLiteral("1.2 MB"));
-        QCOMPARE(octetsToString(12345678) , QStringLiteral("12 MB"));
-        QCOMPARE(octetsToString(123456789) , QStringLiteral("118 MB"));
-        QCOMPARE(octetsToString(1000LL*1000*1000 * 5) , QStringLiteral("4.7 GB"));
+        QCOMPARE(octetsToString(123456), QStringLiteral("121 KB"));
+        QCOMPARE(octetsToString(1234567), QStringLiteral("1.2 MB"));
+        QCOMPARE(octetsToString(12345678), QStringLiteral("12 MB"));
+        QCOMPARE(octetsToString(123456789), QStringLiteral("118 MB"));
+        QCOMPARE(octetsToString(1000LL * 1000 * 1000 * 5), QStringLiteral("4.7 GB"));
 
         QCOMPARE(octetsToString(1), QStringLiteral("1 B"));
         QCOMPARE(octetsToString(2), QStringLiteral("2 B"));
         QCOMPARE(octetsToString(1024), QStringLiteral("1 KB"));
-        QCOMPARE(octetsToString(1024*1024), QStringLiteral("1 MB"));
-        QCOMPARE(octetsToString(1024LL*1024*1024), QStringLiteral("1 GB"));
-        QCOMPARE(octetsToString(1024LL*1024*1024*1024), QStringLiteral("1 TB"));
-        QCOMPARE(octetsToString(1024LL*1024*1024*1024 * 5), QStringLiteral("5 TB"));
+        QCOMPARE(octetsToString(1024 * 1024), QStringLiteral("1 MB"));
+        QCOMPARE(octetsToString(1024LL * 1024 * 1024), QStringLiteral("1 GB"));
+        QCOMPARE(octetsToString(1024LL * 1024 * 1024 * 1024), QStringLiteral("1 TB"));
+        QCOMPARE(octetsToString(1024LL * 1024 * 1024 * 1024 * 5), QStringLiteral("5 TB"));
     }
 
     void testLaunchOnStartup()
@@ -152,43 +152,39 @@ private Q_SLOTS:
     void testDurationToDescriptiveString()
     {
         QLocale::setDefault(QLocale("C"));
-        //NOTE: in order for the plural to work we would need to load the english translation
+        // NOTE: in order for the plural to work we would need to load the english translation
 
         quint64 sec = 1000;
         quint64 hour = 3600 * sec;
 
         QDateTime current = QDateTime::currentDateTimeUtc();
 
-        QCOMPARE(durationToDescriptiveString2(0), QStringLiteral("0 second(s)") );
-        QCOMPARE(durationToDescriptiveString2(5), QStringLiteral("0 second(s)") );
-        QCOMPARE(durationToDescriptiveString2(1000), QStringLiteral("1 second(s)") );
-        QCOMPARE(durationToDescriptiveString2(1005), QStringLiteral("1 second(s)") );
-        QCOMPARE(durationToDescriptiveString2(56123), QStringLiteral("56 second(s)") );
-        QCOMPARE(durationToDescriptiveString2(90*sec), QStringLiteral("1 minute(s) 30 second(s)") );
-        QCOMPARE(durationToDescriptiveString2(3*hour), QStringLiteral("3 hour(s)") );
-        QCOMPARE(durationToDescriptiveString2(3*hour + 20*sec), QStringLiteral("3 hour(s)") );
-        QCOMPARE(durationToDescriptiveString2(3*hour + 70*sec), QStringLiteral("3 hour(s) 1 minute(s)") );
-        QCOMPARE(durationToDescriptiveString2(3*hour + 100*sec), QStringLiteral("3 hour(s) 2 minute(s)") );
-        QCOMPARE(durationToDescriptiveString2(current.msecsTo(current.addYears(4).addMonths(5).addDays(2).addSecs(23*60*60))),
-                 QStringLiteral("4 year(s) 5 month(s)") );
-        QCOMPARE(durationToDescriptiveString2(current.msecsTo(current.addDays(2).addSecs(23*60*60))),
-                 QStringLiteral("2 day(s) 23 hour(s)") );
+        QCOMPARE(durationToDescriptiveString2(0), QStringLiteral("0 second(s)"));
+        QCOMPARE(durationToDescriptiveString2(5), QStringLiteral("0 second(s)"));
+        QCOMPARE(durationToDescriptiveString2(1000), QStringLiteral("1 second(s)"));
+        QCOMPARE(durationToDescriptiveString2(1005), QStringLiteral("1 second(s)"));
+        QCOMPARE(durationToDescriptiveString2(56123), QStringLiteral("56 second(s)"));
+        QCOMPARE(durationToDescriptiveString2(90 * sec), QStringLiteral("1 minute(s) 30 second(s)"));
+        QCOMPARE(durationToDescriptiveString2(3 * hour), QStringLiteral("3 hour(s)"));
+        QCOMPARE(durationToDescriptiveString2(3 * hour + 20 * sec), QStringLiteral("3 hour(s)"));
+        QCOMPARE(durationToDescriptiveString2(3 * hour + 70 * sec), QStringLiteral("3 hour(s) 1 minute(s)"));
+        QCOMPARE(durationToDescriptiveString2(3 * hour + 100 * sec), QStringLiteral("3 hour(s) 2 minute(s)"));
+        QCOMPARE(durationToDescriptiveString2(current.msecsTo(current.addYears(4).addMonths(5).addDays(2).addSecs(23 * 60 * 60))),
+                 QStringLiteral("4 year(s) 5 month(s)"));
+        QCOMPARE(durationToDescriptiveString2(current.msecsTo(current.addDays(2).addSecs(23 * 60 * 60))), QStringLiteral("2 day(s) 23 hour(s)"));
 
-        QCOMPARE(durationToDescriptiveString1(0), QStringLiteral("0 second(s)") );
-        QCOMPARE(durationToDescriptiveString1(5), QStringLiteral("0 second(s)") );
-        QCOMPARE(durationToDescriptiveString1(1000), QStringLiteral("1 second(s)") );
-        QCOMPARE(durationToDescriptiveString1(1005), QStringLiteral("1 second(s)") );
-        QCOMPARE(durationToDescriptiveString1(56123), QStringLiteral("56 second(s)") );
-        QCOMPARE(durationToDescriptiveString1(90*sec), QStringLiteral("2 minute(s)") );
-        QCOMPARE(durationToDescriptiveString1(3*hour), QStringLiteral("3 hour(s)") );
-        QCOMPARE(durationToDescriptiveString1(3*hour + 20*sec), QStringLiteral("3 hour(s)") );
-        QCOMPARE(durationToDescriptiveString1(3*hour + 70*sec), QStringLiteral("3 hour(s)") );
-        QCOMPARE(durationToDescriptiveString1(3*hour + 100*sec), QStringLiteral("3 hour(s)") );
-        QCOMPARE(durationToDescriptiveString1(current.msecsTo(current.addYears(4).addMonths(5).addDays(2).addSecs(23*60*60))),
-                 QStringLiteral("4 year(s)") );
-        QCOMPARE(durationToDescriptiveString1(current.msecsTo(current.addDays(2).addSecs(23*60*60))),
-                 QStringLiteral("3 day(s)") );
-
+        QCOMPARE(durationToDescriptiveString1(0), QStringLiteral("0 second(s)"));
+        QCOMPARE(durationToDescriptiveString1(5), QStringLiteral("0 second(s)"));
+        QCOMPARE(durationToDescriptiveString1(1000), QStringLiteral("1 second(s)"));
+        QCOMPARE(durationToDescriptiveString1(1005), QStringLiteral("1 second(s)"));
+        QCOMPARE(durationToDescriptiveString1(56123), QStringLiteral("56 second(s)"));
+        QCOMPARE(durationToDescriptiveString1(90 * sec), QStringLiteral("2 minute(s)"));
+        QCOMPARE(durationToDescriptiveString1(3 * hour), QStringLiteral("3 hour(s)"));
+        QCOMPARE(durationToDescriptiveString1(3 * hour + 20 * sec), QStringLiteral("3 hour(s)"));
+        QCOMPARE(durationToDescriptiveString1(3 * hour + 70 * sec), QStringLiteral("3 hour(s)"));
+        QCOMPARE(durationToDescriptiveString1(3 * hour + 100 * sec), QStringLiteral("3 hour(s)"));
+        QCOMPARE(durationToDescriptiveString1(current.msecsTo(current.addYears(4).addMonths(5).addDays(2).addSecs(23 * 60 * 60))), QStringLiteral("4 year(s)"));
+        QCOMPARE(durationToDescriptiveString1(current.msecsTo(current.addDays(2).addSecs(23 * 60 * 60))), QStringLiteral("3 day(s)"));
     }
 
     void testTimeAgo()
@@ -208,22 +204,22 @@ private Q_SLOTS:
         // 'Now' in whatever timezone
         earlyTS = QDateTime::currentDateTime();
         laterTS = earlyTS;
-        s = timeAgoInWords(earlyTS, laterTS );
+        s = timeAgoInWords(earlyTS, laterTS);
         QCOMPARE(s, QLatin1String("now"));
 
         earlyTS = earlyTS.addSecs(-6);
-        s = timeAgoInWords(earlyTS, laterTS );
+        s = timeAgoInWords(earlyTS, laterTS);
         QCOMPARE(s, QLatin1String("1min"));
     }
 
     void testFsCasePreserving()
     {
-        QVERIFY(isMac() || isWindows() ? fsCasePreserving() : ! fsCasePreserving());
+        QVERIFY(isMac() || isWindows() ? fsCasePreserving() : !fsCasePreserving());
         QScopedValueRollback<bool> scope(OCC::fsCasePreserving_override);
         OCC::fsCasePreserving_override = true;
         QVERIFY(fsCasePreserving());
         OCC::fsCasePreserving_override = false;
-        QVERIFY(! fsCasePreserving());
+        QVERIFY(!fsCasePreserving());
     }
 
     void testFileNamesEqual()
@@ -232,8 +228,8 @@ private Q_SLOTS:
         QVERIFY(dir.isValid());
         QDir dir2(dir.path());
         QVERIFY(dir2.mkpath("test"));
-        if( !fsCasePreserving() ) {
-        QVERIFY(dir2.mkpath("TEST"));
+        if (!fsCasePreserving()) {
+            QVERIFY(dir2.mkpath("TEST"));
         }
         QVERIFY(dir2.mkpath("test/TESTI"));
         QVERIFY(dir2.mkpath("TESTI"));
@@ -243,13 +239,13 @@ private Q_SLOTS:
 
         QVERIFY(fileNamesEqual(a, b));
 
-        QVERIFY(fileNamesEqual(a+"/test", b+"/test")); // both exist
-        QVERIFY(fileNamesEqual(a+"/test/TESTI", b+"/test/../test/TESTI")); // both exist
+        QVERIFY(fileNamesEqual(a + "/test", b + "/test")); // both exist
+        QVERIFY(fileNamesEqual(a + "/test/TESTI", b + "/test/../test/TESTI")); // both exist
 
         QScopedValueRollback<bool> scope(OCC::fsCasePreserving_override, true);
-        QVERIFY(fileNamesEqual(a+"/test", b+"/TEST")); // both exist
+        QVERIFY(fileNamesEqual(a + "/test", b + "/TEST")); // both exist
 
-        QVERIFY(!fileNamesEqual(a+"/test", b+"/test/TESTI")); // both are different
+        QVERIFY(!fileNamesEqual(a + "/test", b + "/test/TESTI")); // both are different
 
         dir.remove();
     }
@@ -259,15 +255,11 @@ private Q_SLOTS:
         QTest::addColumn<QString>("input");
         QTest::addColumn<QString>("output");
 
-        QTest::newRow("")
-            << "foobar"
-            << "foobar";
-        QTest::newRow("")
-            << "a/b?c<d>e\\f:g*h|i\"j"
-            << "abcdefghij";
-        QTest::newRow("")
-            << QString::fromLatin1("a\x01 b\x1f c\x80 d\x9f")
-            << "a b c d";
+        QTest::newRow("") << "foobar"
+                          << "foobar";
+        QTest::newRow("") << "a/b?c<d>e\\f:g*h|i\"j"
+                          << "abcdefghij";
+        QTest::newRow("") << QString::fromLatin1("a\x01 b\x1f c\x80 d\x9f") << "a b c d";
     }
 
     void testSanitizeForFileName()
@@ -281,9 +273,9 @@ private Q_SLOTS:
     {
         QByteArray str;
 
-#define CHECK_NORMALIZE_ETAG(TEST, EXPECT) \
-    str = OCC::Utility::normalizeEtag(TEST); \
-    QCOMPARE(str.constData(), EXPECT); \
+#define CHECK_NORMALIZE_ETAG(TEST, EXPECT)                                                                                                                     \
+    str = OCC::Utility::normalizeEtag(TEST);                                                                                                                   \
+    QCOMPARE(str.constData(), EXPECT);
 
         CHECK_NORMALIZE_ETAG("foo", "foo");
         CHECK_NORMALIZE_ETAG("\"foo\"", "foo");
@@ -351,11 +343,7 @@ private Q_SLOTS:
 
     void testFullRemotePathToRemoteSyncRootRelative()
     {
-        QVector<QPair<QString, QString>> remoteFullPathsForRoot = {
-            {"2020", {"2020"}},
-            {"/2021/", {"2021"}},
-            {"/2022/file.docx", {"2022/file.docx"}}
-        };
+        QVector<QPair<QString, QString>> remoteFullPathsForRoot = {{"2020", {"2020"}}, {"/2021/", {"2021"}}, {"/2022/file.docx", {"2022/file.docx"}}};
         // test against root remote path - result must stay unchanged, leading and trailing slashes must get removed
         for (const auto &remoteFullPathForRoot : remoteFullPathsForRoot) {
             const auto fullRemotePathOriginal = remoteFullPathForRoot.first;
@@ -365,11 +353,9 @@ private Q_SLOTS:
         }
 
         const auto remotePathNonRoot = QStringLiteral("/Documents/reports");
-        QVector<QPair<QString, QString>> remoteFullPathsForNonRoot = {
-            {remotePathNonRoot + "/" + "2020", {"2020"}},
-            {remotePathNonRoot + "/" + "2021/", {"2021"}},
-            {remotePathNonRoot + "/" + "2022/file.docx", {"2022/file.docx"}}
-        };
+        QVector<QPair<QString, QString>> remoteFullPathsForNonRoot = {{remotePathNonRoot + "/" + "2020", {"2020"}},
+                                                                      {remotePathNonRoot + "/" + "2021/", {"2021"}},
+                                                                      {remotePathNonRoot + "/" + "2022/file.docx", {"2022/file.docx"}}};
 
         // test against non-root remote path - must always return a proper path as in local db
         for (const auto &remoteFullPathForNonRoot : remoteFullPathsForNonRoot) {

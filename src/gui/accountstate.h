@@ -20,7 +20,8 @@
 class QSettings;
 class FakeAccountState;
 
-namespace OCC {
+namespace OCC
+{
 
 class AccountState;
 class Account;
@@ -97,7 +98,7 @@ public:
     bool isSignedOut() const;
 
     AccountAppList appList() const;
-    AccountApp* findApp(const QString &appId) const;
+    AccountApp *findApp(const QString &appId) const;
 
     /** A user-triggered sign out which disconnects, stops syncs
      * for the account and forgets the password. */
@@ -133,38 +134,38 @@ public:
 
     /** Saves the ETag Response header from the last Notifications api
      * request with statusCode 200.
-    */
+     */
     QByteArray notificationsEtagResponseHeader() const;
 
     /** Returns the ETag Response header from the last Notifications api
      * request with statusCode 200.
-    */
+     */
     void setNotificationsEtagResponseHeader(const QByteArray &value);
 
     /** Saves the ETag Response header from the last Navigation Apps api
      * request with statusCode 200.
-    */
+     */
     QByteArray navigationAppsEtagResponseHeader() const;
 
     /** Returns the ETag Response header from the last Navigation Apps api
      * request with statusCode 200.
-    */
+     */
     void setNavigationAppsEtagResponseHeader(const QByteArray &value);
 
-    ///Asks for user credentials
+    /// Asks for user credentials
     void handleInvalidCredentials();
 
     /** Returns the notifications status retrieved by the notifications endpoint
      *  https://github.com/nextcloud/desktop/issues/2318#issuecomment-680698429
-    */
+     */
     bool isDesktopNotificationsAllowed() const;
 
     /** Set desktop notifications status retrieved by the notifications endpoint
-    */
+     */
     void setDesktopNotificationsAllowed(bool isAllowed);
 
     ConnectionStatus lastConnectionStatus() const;
-    
+
     void trySignIn();
 
     void systemOnlineConfigurationChanged();
@@ -266,9 +267,7 @@ class AccountApp : public QObject
 {
     Q_OBJECT
 public:
-    AccountApp(const QString &name, const QUrl &url,
-        const QString &id, const QUrl &iconUrl,
-        QObject* parent = nullptr);
+    AccountApp(const QString &name, const QUrl &url, const QString &id, const QUrl &iconUrl, QObject *parent = nullptr);
 
     [[nodiscard]] QString name() const;
     [[nodiscard]] QUrl url() const;
@@ -288,4 +287,4 @@ private:
 Q_DECLARE_METATYPE(OCC::AccountState *)
 Q_DECLARE_METATYPE(OCC::AccountStatePtr)
 
-#endif //ACCOUNTINFO_H
+#endif // ACCOUNTINFO_H

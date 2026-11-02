@@ -320,7 +320,6 @@ void ShareModel::updateData()
     auto job = new PropfindJob(_accountState->account(), _sharePath);
     job->setProperties(QList<QByteArray>() << "http://open-collaboration-services.org/ns:share-permissions"
                                            << "http://owncloud.org/ns:fileid" // numeric file id for fallback private link generation
-                                           << "http://owncloud.org/ns:privatelink"
                                            << "http://owncloud.org/ns:owner-id"
                                            << "http://owncloud.org/ns:owner-display-name");
     job->setTimeout(10 * 1000);
@@ -462,16 +461,8 @@ void ShareModel::slotPropfindReceived(const QVariantMap &result)
         }
     }
 
-    const auto privateLinkUrl = result["privatelink"].toString();
     _fileRemoteId = result["fileid"].toByteArray();
-
-    if (!privateLinkUrl.isEmpty()) {
-        qCInfo(lcShareModel) << "Received private link url for" << _sharePath << privateLinkUrl;
-        _privateLinkUrl = privateLinkUrl;
-    } else if (!_fileRemoteId.isEmpty()) {
-        qCInfo(lcShareModel) << "Received numeric file id for" << _sharePath << _fileRemoteId;
-        _privateLinkUrl = _accountState->account()->deprecatedPrivateLinkUrl(_fileRemoteId).toString(QUrl::FullyEncoded);
-    }
+    _privateLinkUrl = _accountState->account()->internalLinkUrl(_fileRemoteId).toString(QUrl::FullyEncoded);
 
     setupInternalLinkShare();
 }
@@ -741,7 +732,13 @@ QString ShareModel::displayStringForShare(const SharePtr &share, const bool verb
 
         const auto isSecureFileDropShare = isSecureFileDropSupportedFolder() && linkShare->getPermissions().testFlag(OCC::SharePermission::SharePermissionCreate);
 
-        const auto displayString = isSecureFileDropShare ? tr("Secure file drop link") : tr("Share link");
+        auto displayString = QString{};
+        if (isSecureFileDropShare) {
+            displayString = tr("Secure file drop link");
+        } else {
+            //: "Share link" is a noun phrase referring to a public link that grants access to the shared item.
+            displayString = tr("Share link");
+        }
 
         if (!linkShare->getLabel().isEmpty()) {
             return QStringLiteral("%1 (%2)").arg(displayString, linkShare->getLabel());

@@ -17,17 +17,20 @@
 class QNetworkReply;
 class QAuthenticator;
 
-namespace QKeychain {
-    class Job;
+namespace QKeychain
+{
+class Job;
 }
 
-namespace OCC {
+namespace OCC
+{
 
 class PrivateCloudCredentialsDialog;
 
-namespace KeychainChunk {
-    class ReadJob;
-    class WriteJob;
+namespace KeychainChunk
+{
+class ReadJob;
+class WriteJob;
 }
 
 class BrowserReAuthWindow;
@@ -39,12 +42,11 @@ class WebFlowCredentials : public AbstractCredentials
 
 public:
     explicit WebFlowCredentials();
-    WebFlowCredentials(
-            const QString &user,
-            const QString &password,
-            const QSslCertificate &certificate = QSslCertificate(),
-            const QSslKey &key = QSslKey(),
-            const QList<QSslCertificate> &caCertificates = QList<QSslCertificate>());
+    WebFlowCredentials(const QString &user,
+                       const QString &password,
+                       const QSslCertificate &certificate = QSslCertificate(),
+                       const QSslKey &key = QSslKey(),
+                       const QList<QSslCertificate> &caCertificates = QList<QSslCertificate>());
 
     [[nodiscard]] QString authType() const override;
     [[nodiscard]] QString user() const override;

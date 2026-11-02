@@ -26,7 +26,8 @@
 
 using namespace Qt::StringLiterals;
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcAccessManager, "nextcloud.sync.accessmanager", QtInfoMsg)
 

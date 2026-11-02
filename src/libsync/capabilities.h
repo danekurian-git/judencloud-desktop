@@ -17,6 +17,7 @@
 namespace OCC {
 
 class DirectEditor;
+struct ServerManagedSettings;
 
 enum PushNotificationType {
     None = 0,
@@ -50,6 +51,7 @@ public:
     [[nodiscard]] int shareRemoteExpireDateDays() const;
     [[nodiscard]] bool shareResharing() const;
     [[nodiscard]] int shareDefaultPermissions() const;
+    [[nodiscard]] bool unifiedSharingAvailable() const;
     [[nodiscard]] bool chunkingNg() const;
     [[nodiscard]] qint64 maxChunkSize() const;
     [[nodiscard]] int maxConcurrentChunkUploads() const;
@@ -72,8 +74,8 @@ public:
     /// disable parallel upload in chunking
     [[nodiscard]] bool chunkingParallelUploadDisabled() const;
 
-    /// Whether the "privatelink" DAV property is available
-    [[nodiscard]] bool privateLinkPropertyAvailable() const;
+    /// Returns the Global Scale instance token, or an empty string when unavailable.
+    [[nodiscard]] QString globalScaleToken() const;
 
     /// returns true if the capabilities report notifications
     [[nodiscard]] bool notificationsAvailable() const;
@@ -170,6 +172,7 @@ public:
 
     [[nodiscard]] bool serverHasValidSubscription() const;
     [[nodiscard]] QString desktopEnterpriseChannel() const;
+    [[nodiscard]] ServerManagedSettings desktopClientManagedSettings() const;
 
     [[nodiscard]] bool serverHasClientIntegration() const;
     [[nodiscard]] QList<QVariantMap> fileActionsByMimeType(const QMimeType &fileMimeType) const;

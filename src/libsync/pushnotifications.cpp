@@ -10,14 +10,16 @@
 
 #include <QJsonArray>
 
-namespace {
+namespace
+{
 static constexpr int MAX_ALLOWED_FAILED_AUTHENTICATION_ATTEMPTS = 3;
 static constexpr int PING_INTERVAL = 30 * 1000;
 
 static constexpr QLatin1String NOTIFY_FILE_ID_PREFIX = QLatin1String{"notify_file_id "};
 }
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcPushNotifications, "nextcloud.sync.pushnotifications", QtInfoMsg)
 
@@ -239,12 +241,13 @@ void PushNotifications::handleNotifyFileId(const QString &message)
     const auto jsonDoc = QJsonDocument::fromJson(fileIdsJson.toUtf8(), &parseError);
 
     if (parseError.error != QJsonParseError::NoError) {
-        qCWarning(lcPushNotifications).nospace() << "could not parse received list of file IDs error=" << parseError.error << " errorString=" << parseError.errorString() << " fileIdsJson=" << fileIdsJson;
+        qCWarning(lcPushNotifications).nospace() << "could not parse received list of file IDs error=" << parseError.error
+                                                 << " errorString=" << parseError.errorString() << " fileIdsJson=" << fileIdsJson;
         return;
     }
 
     if (const auto jsonArray = jsonDoc.array(); jsonDoc.isArray()) {
-        for (const auto& jsonFileid : jsonArray) {
+        for (const auto &jsonFileid : jsonArray) {
             if (const auto fileid = jsonFileid.toInteger(); jsonFileid.isDouble()) {
                 fileIds.push_back(fileid);
             }

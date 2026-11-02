@@ -34,7 +34,8 @@ extern Q_CORE_EXPORT int qt_ntfs_permission_lookup;
 static const char systemRunPathC[] = R"(HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run)";
 static const char runPathC[] = R"(HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run)";
 
-namespace OCC {
+namespace OCC
+{
 
 OCSYNC_EXPORT std::function<Utility::LocalStorageType(const QString &)> localStorageTypeOverride;
 
@@ -147,13 +148,13 @@ QVector<Utility::ProcessInfosForOpenFile> Utility::queryProcessInfosKeepingFileO
     std::vector<RM_PROCESS_INFO> rmProcessInfos;
     auto rmProcessInfosRequestedCount = static_cast<UINT>(rmProcessInfos.size());
     errorStatus = RmGetList(restartManagerSession, &rmProcessInfosNeededCount, &rmProcessInfosRequestedCount, rmProcessInfos.data(), &rebootReasons);
-    
+
     if (errorStatus == ERROR_MORE_DATA) {
         rmProcessInfos.resize(rmProcessInfosNeededCount, {});
         rmProcessInfosRequestedCount = static_cast<UINT>(rmProcessInfos.size());
         errorStatus = RmGetList(restartManagerSession, &rmProcessInfosNeededCount, &rmProcessInfosRequestedCount, rmProcessInfos.data(), &rebootReasons);
     }
-    
+
     if (errorStatus != ERROR_SUCCESS || rmProcessInfos.empty()) {
         RmEndSession(restartManagerSession);
         return results;
@@ -319,7 +320,7 @@ void Utility::migrateFavLink(const QString &folder)
     }
 
     qCDebug(lcUtility) << "Renaming favorite link from" << oldLnkFilename << "to" << newLnkFilename;
-    if (QFile::rename(oldLnkFilename, newLnkFilename)  && !QFile::rename(oldLnkFilename, newLnkFilename)) {
+    if (QFile::rename(oldLnkFilename, newLnkFilename) && !QFile::rename(oldLnkFilename, newLnkFilename)) {
         qCWarning(lcUtility) << "renaming" << oldLnkFilename << "to" << newLnkFilename << "failed!";
     }
 }
@@ -330,8 +331,7 @@ void Utility::removeFavLink(const QString &folder)
 
     // #1 Remove the Desktop.ini to reset the folder icon
     if (!QFile::remove(folderDir.absoluteFilePath(QLatin1String("Desktop.ini")))) {
-        qCWarning(lcUtility) << "Remove Desktop.ini from" << folder
-                             << " has failed. Make sure it exists and is not locked by another process.";
+        qCWarning(lcUtility) << "Remove Desktop.ini from" << folder << " has failed. Make sure it exists and is not locked by another process.";
     }
 
     // #2 Remove the system file attribute
@@ -392,12 +392,12 @@ bool Utility::launchOnStartupRequiresApproval()
 
 bool Utility::hasDarkSystray()
 {
-    if(Utility::registryGetKeyValue(    HKEY_CURRENT_USER,
-                                        QStringLiteral(R"(Software\Microsoft\Windows\CurrentVersion\Themes\Personalize)"),
-                                        QStringLiteral("SystemUsesLightTheme") ) == 1) {
+    if (Utility::registryGetKeyValue(HKEY_CURRENT_USER,
+                                     QStringLiteral(R"(Software\Microsoft\Windows\CurrentVersion\Themes\Personalize)"),
+                                     QStringLiteral("SystemUsesLightTheme"))
+        == 1) {
         return false;
-    }
-    else {
+    } else {
         return true;
     }
 }
@@ -436,8 +436,9 @@ QVariant Utility::registryGetKeyValue(HKEY hRootKey, const QString &subKey, cons
     REGSAM sam = KEY_READ | KEY_WOW64_64KEY;
     LONG result = RegOpenKeyEx(hRootKey, reinterpret_cast<LPCWSTR>(subKey.utf16()), 0, sam, &hKey);
     ASSERT(result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND);
-    if (result != ERROR_SUCCESS)
+    if (result != ERROR_SUCCESS) {
         return value;
+    }
 
     DWORD type = 0, sizeInBytes = 0;
     result = RegQueryValueEx(hKey, reinterpret_cast<LPCWSTR>(valueName.utf16()), 0, &type, nullptr, &sizeInBytes);
@@ -447,7 +448,8 @@ QVariant Utility::registryGetKeyValue(HKEY hRootKey, const QString &subKey, cons
         case REG_DWORD:
             DWORD dword;
             Q_ASSERT(sizeInBytes == sizeof(dword));
-            if (RegQueryValueEx(hKey, reinterpret_cast<LPCWSTR>(valueName.utf16()), 0, &type, reinterpret_cast<LPBYTE>(&dword), &sizeInBytes) == ERROR_SUCCESS) {
+            if (RegQueryValueEx(hKey, reinterpret_cast<LPCWSTR>(valueName.utf16()), 0, &type, reinterpret_cast<LPBYTE>(&dword), &sizeInBytes)
+                == ERROR_SUCCESS) {
                 value = int(dword);
             }
             break;
@@ -463,8 +465,9 @@ QVariant Utility::registryGetKeyValue(HKEY hRootKey, const QString &subKey, cons
                 // If the data has the REG_SZ, REG_MULTI_SZ or REG_EXPAND_SZ type, the string may not have been stored with
                 // the proper terminating null characters. Therefore, even if the function returns ERROR_SUCCESS,
                 // the application should ensure that the string is properly terminated before using it; otherwise, it may overwrite a buffer.
-                if (string.at(newCharSize - 1) == QLatin1Char('\0'))
+                if (string.at(newCharSize - 1) == QLatin1Char('\0')) {
                     string.resize(newCharSize - 1);
+                }
                 value = string;
             }
             break;
@@ -494,12 +497,14 @@ bool Utility::registrySetKeyValue(HKEY hRootKey, const QString &subKey, const QS
     // KEY_WOW64_64KEY is necessary because CLSIDs are "Redirected and reflected only for CLSIDs that do not specify InprocServer32 or InprocHandler32."
     // https://msdn.microsoft.com/en-us/library/windows/desktop/aa384253%28v=vs.85%29.aspx#redirected__shared__and_reflected_keys_under_wow64
     // This shouldn't be an issue in our case since we use shell32.dll as InprocServer32, so we could write those registry keys for both 32 and 64bit.
-    // FIXME: Not doing so at the moment means that explorer will show the cloud provider, but 32bit processes' open dialogs (like the ownCloud client itself) won't show it.
+    // FIXME: Not doing so at the moment means that explorer will show the cloud provider, but 32bit processes' open dialogs (like the ownCloud client itself)
+    // won't show it.
     REGSAM sam = KEY_WRITE | KEY_WOW64_64KEY;
     LONG result = RegCreateKeyEx(hRootKey, reinterpret_cast<LPCWSTR>(subKey.utf16()), 0, nullptr, 0, sam, nullptr, &hKey, nullptr);
     ASSERT(result == ERROR_SUCCESS);
-    if (result != ERROR_SUCCESS)
+    if (result != ERROR_SUCCESS) {
         return false;
+    }
 
     result = -1;
     switch (type) {
@@ -511,7 +516,12 @@ bool Utility::registrySetKeyValue(HKEY hRootKey, const QString &subKey, const QS
     case REG_EXPAND_SZ:
     case REG_SZ: {
         QString string = value.toString();
-        result = RegSetValueEx(hKey, reinterpret_cast<LPCWSTR>(valueName.utf16()), 0, type, reinterpret_cast<const BYTE *>(string.constData()), (string.size() + 1) * sizeof(QChar));
+        result = RegSetValueEx(hKey,
+                               reinterpret_cast<LPCWSTR>(valueName.utf16()),
+                               0,
+                               type,
+                               reinterpret_cast<const BYTE *>(string.constData()),
+                               (string.size() + 1) * sizeof(QChar));
         break;
     }
     default:
@@ -529,8 +539,9 @@ bool Utility::registryDeleteKeyTree(HKEY hRootKey, const QString &subKey)
     REGSAM sam = DELETE | KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_WOW64_64KEY;
     LONG result = RegOpenKeyEx(hRootKey, reinterpret_cast<LPCWSTR>(subKey.utf16()), 0, sam, &hKey);
     ASSERT(result == ERROR_SUCCESS);
-    if (result != ERROR_SUCCESS)
+    if (result != ERROR_SUCCESS) {
         return false;
+    }
 
     result = RegDeleteTree(hKey, nullptr);
     RegCloseKey(hKey);
@@ -548,8 +559,9 @@ bool Utility::registryDeleteKeyValue(HKEY hRootKey, const QString &subKey, const
     REGSAM sam = KEY_WRITE | KEY_WOW64_64KEY;
     LONG result = RegOpenKeyEx(hRootKey, reinterpret_cast<LPCWSTR>(subKey.utf16()), 0, sam, &hKey);
     ASSERT(result == ERROR_SUCCESS);
-    if (result != ERROR_SUCCESS)
+    if (result != ERROR_SUCCESS) {
         return false;
+    }
 
     result = RegDeleteValue(hKey, reinterpret_cast<LPCWSTR>(valueName.utf16()));
     ASSERT(result == ERROR_SUCCESS);
@@ -564,8 +576,9 @@ bool Utility::registryWalkSubKeys(HKEY hRootKey, const QString &subKey, const st
     REGSAM sam = KEY_READ | KEY_WOW64_64KEY;
     LONG result = RegOpenKeyEx(hRootKey, reinterpret_cast<LPCWSTR>(subKey.utf16()), 0, sam, &hKey);
     ASSERT(result == ERROR_SUCCESS);
-    if (result != ERROR_SUCCESS)
+    if (result != ERROR_SUCCESS) {
         return false;
+    }
 
     DWORD maxSubKeyNameSize;
     // Get the largest keyname size once instead of relying each call on ERROR_MORE_DATA.
@@ -646,8 +659,8 @@ bool Utility::registryWalkValues(HKEY hRootKey, const QString &subKey, const std
 
 DWORD Utility::convertSizeToDWORD(size_t &convertVar)
 {
-    if( convertVar > UINT_MAX ) {
-        //throw std::bad_cast();
+    if (convertVar > UINT_MAX) {
+        // throw std::bad_cast();
         convertVar = UINT_MAX; // intentionally default to wrong value here to not crash: exception handling TBD
     }
     return static_cast<DWORD>(convertVar);
@@ -661,9 +674,7 @@ void Utility::UnixTimeToLargeIntegerFiletime(time_t t, LARGE_INTEGER *hundredNSe
 bool Utility::canCreateFileInPath(const QString &path)
 {
     Q_ASSERT(!path.isEmpty());
-    const auto pathWithSlash = !path.endsWith(QLatin1Char('/'))
-        ? path + QLatin1Char('/')
-        : path;
+    const auto pathWithSlash = !path.endsWith(QLatin1Char('/')) ? path + QLatin1Char('/') : path;
     QTemporaryFile testFile(pathWithSlash + QStringLiteral("~$write-test-file-XXXXXX"));
     return testFile.open();
 }
@@ -677,7 +688,7 @@ QString Utility::getCurrentUserName()
 {
     TCHAR username[UNLEN + 1] = {0};
     DWORD len = sizeof(username) / sizeof(TCHAR);
-    
+
     if (!GetUserName(username, &len)) {
         const auto lastError = GetLastError();
         qCWarning(lcUtility).nospace() << "Could not retrieve Windows user name. errorMessage=" << formatWinError(lastError);
@@ -686,7 +697,9 @@ QString Utility::getCurrentUserName()
     return QString::fromWCharArray(username);
 }
 
-void Utility::registerUriHandlerForLocalEditing() { /* URI handler is registered via Nextcloud.wxs */ }
+void Utility::registerUriHandlerForLocalEditing()
+{ /* URI handler is registered via Nextcloud.wxs */
+}
 
 Utility::NtfsPermissionLookupRAII::NtfsPermissionLookupRAII()
 {

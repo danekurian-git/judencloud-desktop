@@ -34,7 +34,8 @@
 
 using namespace Qt::StringLiterals;
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcAccountState, "nextcloud.gui.account.state", QtInfoMsg)
 
@@ -51,30 +52,21 @@ AccountState::AccountState(const AccountPtr &account)
 {
     qRegisterMetaType<AccountState *>("AccountState*");
 
-    connect(account.data(), &Account::invalidCredentials,
-        this, &AccountState::slotHandleRemoteWipeCheck);
-    connect(account.data(), &Account::credentialsFetched,
-        this, &AccountState::slotCredentialsFetched);
-    connect(account.data(), &Account::credentialsAsked,
-        this, &AccountState::slotCredentialsAsked);
-    connect(account.data(), &Account::pushNotificationsReady,
-            this, &AccountState::slotPushNotificationsReady);
-    connect(account.data(), &Account::serverUserStatusChanged, this,
-        &AccountState::slotServerUserStatusChanged);
-    connect(&_termsOfServiceChecker, &TermsOfServiceChecker::done,
-            this, [this] ()
-            {
-                if (_termsOfServiceChecker.needToSign()) {
-                    slotConnectionValidatorResult(ConnectionValidator::NeedToSignTermsOfService, {});
-                }
-            });
-    connect(account.data(), &Account::termsOfServiceNeedToBeChecked,
-            this, [this] ()
-            {
-                _termsOfServiceChecker.start();
-            });
+    connect(account.data(), &Account::invalidCredentials, this, &AccountState::slotHandleRemoteWipeCheck);
+    connect(account.data(), &Account::credentialsFetched, this, &AccountState::slotCredentialsFetched);
+    connect(account.data(), &Account::credentialsAsked, this, &AccountState::slotCredentialsAsked);
+    connect(account.data(), &Account::pushNotificationsReady, this, &AccountState::slotPushNotificationsReady);
+    connect(account.data(), &Account::serverUserStatusChanged, this, &AccountState::slotServerUserStatusChanged);
+    connect(&_termsOfServiceChecker, &TermsOfServiceChecker::done, this, [this]() {
+        if (_termsOfServiceChecker.needToSign()) {
+            slotConnectionValidatorResult(ConnectionValidator::NeedToSignTermsOfService, {});
+        }
+    });
+    connect(account.data(), &Account::termsOfServiceNeedToBeChecked, this, [this]() {
+        _termsOfServiceChecker.start();
+    });
 
-    connect(this, &AccountState::isConnectedChanged, [=, this]{
+    connect(this, &AccountState::isConnectedChanged, [=, this] {
         // Get the Apps available on the server if we're now connected.
         if (isConnected()) {
             fetchNavigationApps();
@@ -117,8 +109,7 @@ AccountState::State AccountState::state() const
 void AccountState::setState(State state)
 {
     if (_state != state) {
-        qCInfo(lcAccountState) << "AccountState state change: "
-                               << stateString(_state) << "->" << stateString(state);
+        qCInfo(lcAccountState) << "AccountState state change: " << stateString(_state) << "->" << stateString(state);
         State oldState = _state;
         _state = state;
 
@@ -264,7 +255,7 @@ void AccountState::setDesktopNotificationsAllowed(bool isAllowed)
     if (_isDesktopNotificationsAllowed == isAllowed) {
         return;
     }
-    
+
     _isDesktopNotificationsAllowed = isAllowed;
     Q_EMIT desktopNotificationsAllowedChanged();
 }
@@ -317,17 +308,16 @@ void AccountState::checkConnectivity()
     // if the last successful etag check job is not so long ago.
     const auto polltime = std::chrono::duration_cast<std::chrono::seconds>(ConfigFile().remotePollInterval());
     const auto elapsed = _timeOfLastETagCheck.secsTo(QDateTime::currentDateTimeUtc());
-    if (isConnected() && _timeOfLastETagCheck.isValid()
-        && elapsed <= polltime.count()) {
-        qCDebug(lcAccountState) << account()->displayName() << "The last ETag check succeeded within the last " << polltime.count() << "s (" << elapsed << "s). No connection check needed!";
+    if (isConnected() && _timeOfLastETagCheck.isValid() && elapsed <= polltime.count()) {
+        qCDebug(lcAccountState) << account()->displayName() << "The last ETag check succeeded within the last " << polltime.count() << "s (" << elapsed
+                                << "s). No connection check needed!";
         return;
     }
 
     auto *conValidator = new ConnectionValidator(AccountStatePtr(this), _connectionErrors);
     _connectionValidator = conValidator;
     _connectionErrors.clear();
-    connect(conValidator, &ConnectionValidator::connectionResult,
-        this, &AccountState::slotConnectionValidatorResult);
+    connect(conValidator, &ConnectionValidator::connectionResult, this, &AccountState::slotConnectionValidatorResult);
     if (isConnected() || needsToSignTermsOfService()) {
         // Use a small authed propfind as a minimal ping when we're
         // already connected.
@@ -336,7 +326,7 @@ void AccountState::checkConnectivity()
         // Check the server and then the auth.
 
         // Let's try this for all OS and see if it fixes the Qt issues we have on Linux  #4720 #3888 #4051
-        //#ifdef Q_OS_WIN
+        // #ifdef Q_OS_WIN
         // There seems to be a bug in Qt on Windows where QNAM sometimes stops
         // working correctly after the computer woke up from sleep. See #2895 #2899
         // and #2973.
@@ -347,7 +337,7 @@ void AccountState::checkConnectivity()
         // If we don't reset the ssl config a second CheckServerJob can produce a
         // ssl config that does not have a sensible certificate chain.
         account()->setSslConfiguration(QSslConfiguration::defaultConfiguration());
-        //#endif
+        // #endif
         conValidator->checkServerAndAuth();
     }
 }
@@ -378,26 +368,21 @@ void AccountState::slotConnectionValidatorResult(ConnectionValidator::Status sta
 
     // Come online gradually from 503, captive portal(redirection) or maintenance mode
     if (status == ConnectionValidator::Connected
-        && (_connectionStatus == ConnectionValidator::ServiceUnavailable
-            || _connectionStatus == ConnectionValidator::MaintenanceMode
-              || _connectionStatus == ConnectionValidator::StatusRedirect)) {
+        && (_connectionStatus == ConnectionValidator::ServiceUnavailable || _connectionStatus == ConnectionValidator::MaintenanceMode
+            || _connectionStatus == ConnectionValidator::StatusRedirect)) {
         if (!_timeSinceMaintenanceOver.isValid()) {
-            qCInfo(lcAccountState) << "AccountState reconnection: delaying for"
-                                   << _maintenanceToConnectedDelay << "ms";
+            qCInfo(lcAccountState) << "AccountState reconnection: delaying for" << _maintenanceToConnectedDelay << "ms";
             _timeSinceMaintenanceOver.start();
             QTimer::singleShot(_maintenanceToConnectedDelay + 100, this, &AccountState::checkConnectivity);
             return;
         } else if (_timeSinceMaintenanceOver.elapsed() < _maintenanceToConnectedDelay) {
-            qCInfo(lcAccountState) << "AccountState reconnection: only"
-                                   << _timeSinceMaintenanceOver.elapsed() << "ms have passed";
+            qCInfo(lcAccountState) << "AccountState reconnection: only" << _timeSinceMaintenanceOver.elapsed() << "ms have passed";
             return;
         }
     }
 
     if (_connectionStatus != status) {
-        qCInfo(lcAccountState) << "AccountState connection status change: "
-                               << _connectionStatus << "->"
-                               << status;
+        qCInfo(lcAccountState) << "AccountState connection status change: " << _connectionStatus << "->" << status;
         _connectionStatus = status;
         Q_EMIT stateChanged(_state);
     }
@@ -459,10 +444,11 @@ void AccountState::slotConnectionValidatorResult(ConnectionValidator::Status sta
         break;
     }
 
-    if ((oldConnectionValidatorStatus == ConnectionValidator::NeedToSignTermsOfService && status == ConnectionValidator::Connected) ||
-        (status == ConnectionValidator::NeedToSignTermsOfService && oldConnectionValidatorStatus != status)) {
-
-        Q_EMIT termsOfServiceChanged(_account, status == ConnectionValidator::NeedToSignTermsOfService ? AccountState::NeedToSignTermsOfService : AccountState::Connected);
+    if ((oldConnectionValidatorStatus == ConnectionValidator::NeedToSignTermsOfService && status == ConnectionValidator::Connected)
+        || (status == ConnectionValidator::NeedToSignTermsOfService && oldConnectionValidatorStatus != status)) {
+        Q_EMIT termsOfServiceChanged(_account,
+                                     status == ConnectionValidator::NeedToSignTermsOfService ? AccountState::NeedToSignTermsOfService
+                                                                                             : AccountState::Connected);
     }
 }
 
@@ -471,10 +457,8 @@ void AccountState::slotHandleRemoteWipeCheck()
     // make sure it changes account state and icons
     signOutByUi();
 
-    qCInfo(lcAccountState) << "Invalid credentials for" << _account->url().toString()
-                           << "checking for remote wipe request";
+    qCInfo(lcAccountState) << "Invalid credentials for" << _account->url().toString() << "checking for remote wipe request";
 }
-
 
 void AccountState::handleInvalidCredentials()
 {
@@ -482,8 +466,7 @@ void AccountState::handleInvalidCredentials()
         return;
     }
 
-    qCInfo(lcAccountState) << "Invalid credentials for" << _account->url().toString()
-                           << "asking user";
+    qCInfo(lcAccountState) << "Invalid credentials for" << _account->url().toString() << "asking user";
 
     _waitingForNewCredentials = true;
     setState(AskingCredentials);
@@ -494,14 +477,12 @@ void AccountState::handleInvalidCredentials()
     account()->credentials()->askFromUser();
 }
 
-
 void AccountState::slotCredentialsFetched(AbstractCredentials *)
 {
     // Make a connection attempt, no matter whether the credentials are
     // ready or not - we want to check whether we can get an SSL connection
     // going before bothering the user for a password.
-    qCInfo(lcAccountState) << "Fetched credentials for" << _account->url().toString()
-                           << "attempting to connect";
+    qCInfo(lcAccountState) << "Fetched credentials for" << _account->url().toString() << "attempting to connect";
     _waitingForNewCredentials = false;
     if (Migration::isInProgress()) {
         Migration::setPhase(Migration::Phase::Done);
@@ -511,8 +492,7 @@ void AccountState::slotCredentialsFetched(AbstractCredentials *)
 
 void AccountState::slotCredentialsAsked(AbstractCredentials *credentials)
 {
-    qCInfo(lcAccountState) << "Credentials asked for" << _account->url().toString()
-                           << "are they ready?" << credentials->ready();
+    qCInfo(lcAccountState) << "Credentials asked for" << _account->url().toString() << "are they ready?" << credentials->ready();
 
     _waitingForNewCredentials = false;
 
@@ -539,7 +519,8 @@ std::unique_ptr<QSettings> AccountState::settings()
     return s;
 }
 
-void AccountState::fetchNavigationApps(){
+void AccountState::fetchNavigationApps()
+{
     auto *job = new OcsNavigationAppsJob(_account);
     job->addRawHeader("If-None-Match", navigationAppsEtagResponseHeader());
     connect(job, &OcsNavigationAppsJob::appsJobFinished, this, &AccountState::slotNavigationAppsFetched);
@@ -553,8 +534,9 @@ void AccountState::resetRetryCount()
     _retryCount = 0;
 }
 
-void AccountState::slotEtagResponseHeaderReceived(const QByteArray &value, int statusCode){
-    if(statusCode == 200){
+void AccountState::slotEtagResponseHeaderReceived(const QByteArray &value, int statusCode)
+{
+    if (statusCode == 200) {
         qCDebug(lcAccountState) << "New navigation apps ETag Response Header received " << value;
         setNavigationAppsEtagResponseHeader(value);
     }
@@ -570,8 +552,8 @@ void AccountState::slotCheckConnection()
     if (_lastCheckConnectionTimer.isValid()) {
         static constexpr auto DefaultCallingIntervalMaxMsec = static_cast<int>(ConnectionValidator::DefaultCallingIntervalMsec) * 8;
 
-        const auto minDelay = std::max(retryCount() * ConnectionValidator::DefaultCallingIntervalMsec,
-                                       static_cast<int>(ConnectionValidator::DefaultCallingIntervalMsec));
+        const auto minDelay =
+            std::max(retryCount() * ConnectionValidator::DefaultCallingIntervalMsec, static_cast<int>(ConnectionValidator::DefaultCallingIntervalMsec));
         const auto currentDelay = std::min(minDelay, DefaultCallingIntervalMaxMsec);
 
         if (!_lastCheckConnectionTimer.hasExpired(currentDelay - 1)) {
@@ -585,9 +567,11 @@ void AccountState::slotCheckConnection()
     // Don't check if we're manually signed out or
     // when the error is permanent.
     const auto pushNotifications = account()->pushNotifications();
-    const auto pushNotificationsAvailable = (pushNotifications && pushNotifications->isReady());
-    if (currentState != AccountState::SignedOut && currentState != AccountState::ConfigurationError
-        && currentState != AccountState::AskingCredentials && !pushNotificationsAvailable) {
+    // Push only replaces the check for an account already validated as connected. The account
+    // wizard sets capabilities early, so push can be ready before a new account ever connected.
+    const auto pushKeepsAccountConnected = currentState == AccountState::Connected && pushNotifications && pushNotifications->isReady();
+    if (currentState != AccountState::SignedOut && currentState != AccountState::ConfigurationError && currentState != AccountState::AskingCredentials
+        && !pushKeepsAccountConnected) {
         checkConnectivity();
     } else if (currentState == AccountState::SignedOut && lastConnectionStatus() == AccountState::ConnectionStatus::SslError) {
         qCWarning(lcAccountState()) << "Account is signed out due to SSL Handshake error. Going to perform a sign-in attempt...";
@@ -597,9 +581,7 @@ void AccountState::slotCheckConnection()
 
 void AccountState::slotCheckServerAvailibility()
 {
-    if (state() == AccountState::Connected
-        || state() == AccountState::SignedOut
-        || state() == AccountState::MaintenanceMode
+    if (state() == AccountState::Connected || state() == AccountState::SignedOut || state() == AccountState::MaintenanceMode
         || state() == AccountState::AskingCredentials) {
         qCInfo(lcAccountState) << "Skipping server availability check for account" << _account->davUser() << "with state" << state();
         return;
@@ -631,22 +613,24 @@ void AccountState::slotServerUserStatusChanged()
 
 void AccountState::slotNavigationAppsFetched(const QJsonDocument &reply, int statusCode)
 {
-    if(_account){
+    if (_account) {
         if (statusCode == 304) {
             qCWarning(lcAccountState) << "Status code " << statusCode << " Not Modified - No new navigation apps.";
         } else {
             _apps.clear();
 
-            if(!reply.isEmpty()){
+            if (!reply.isEmpty()) {
                 auto element = reply.object().value("ocs").toObject().value("data");
                 const auto navLinks = element.toArray();
 
-                if(navLinks.size() > 0){
+                if (navLinks.size() > 0) {
                     for (const QJsonValue &value : navLinks) {
                         auto navLink = value.toObject();
 
-                        auto *app = new AccountApp(navLink.value("name"_L1).toString(), QUrl(navLink.value("href"_L1).toString()),
-                            navLink.value("id"_L1).toString(), QUrl(navLink.value("icon"_L1).toString()));
+                        auto *app = new AccountApp(navLink.value("name"_L1).toString(),
+                                                   QUrl(navLink.value("href"_L1).toString()),
+                                                   navLink.value("id"_L1).toString(),
+                                                   QUrl(navLink.value("icon"_L1).toString()));
 
                         _apps << app;
                     }
@@ -663,9 +647,9 @@ AccountAppList AccountState::appList() const
     return _apps;
 }
 
-AccountApp* AccountState::findApp(const QString &appId) const
+AccountApp *AccountState::findApp(const QString &appId) const
 {
-    if(!appId.isEmpty()) {
+    if (!appId.isEmpty()) {
         const auto apps = appList();
         const auto it = std::find_if(apps.cbegin(), apps.cend(), [appId](const auto &app) {
             return app->id() == appId;
@@ -680,9 +664,7 @@ AccountApp* AccountState::findApp(const QString &appId) const
 
 /*-------------------------------------------------------------------------------------*/
 
-AccountApp::AccountApp(const QString &name, const QUrl &url,
-    const QString &id, const QUrl &iconUrl,
-    QObject *parent)
+AccountApp::AccountApp(const QString &name, const QUrl &url, const QString &id, const QUrl &iconUrl, QObject *parent)
     : QObject(parent)
     , _name(name)
     , _url(url)

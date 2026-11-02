@@ -15,12 +15,12 @@
 
 #include <QDir>
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcBulkPropagatorDownloadJob, "nextcloud.sync.propagator.bulkdownload", QtInfoMsg)
 
-BulkPropagatorDownloadJob::BulkPropagatorDownloadJob(OwncloudPropagator *propagator,
-                                                     PropagateDirectory *parentDirJob)
+BulkPropagatorDownloadJob::BulkPropagatorDownloadJob(OwncloudPropagator *propagator, PropagateDirectory *parentDirJob)
     : PropagatorJob{propagator}
     , _filesToDownload{}
     , _parentDirJob{parentDirJob}
@@ -69,14 +69,32 @@ void BulkPropagatorDownloadJob::start()
         return;
     }
 
+    _filesToDownload.removeIf([this](const SyncFileItemPtr &fileToDownload) {
+        if (!propagator()->localPathContainsSymlink(fileToDownload->_file)) {
+            return false;
+        }
+        qCWarning(lcBulkPropagatorDownloadJob) << "Do not create a placeholder through a symlink" << fileToDownload->_file;
+        fileToDownload->_status = SyncFileItem::FileIgnored;
+        fileToDownload->_errorString = OwncloudPropagator::symlinkNotSupportedMessage();
+        propagator()->emitItemCompleted(fileToDownload, ErrorCategory::NoError);
+        return true;
+    });
+    if (_filesToDownload.isEmpty()) {
+        done(SyncFileItem::Success);
+        return;
+    }
+
     for (const auto &fileToDownload : std::as_const(_filesToDownload)) {
         Q_ASSERT(fileToDownload->_type == ItemTypeVirtualFile);
 
         if (propagator()->localFileNameClash(fileToDownload->_file)) {
             fileToDownload->_status = SyncFileItem::FileNameClash;
             finalizeOneFile(fileToDownload);
-            qCWarning(lcBulkPropagatorDownloadJob) << "File" << QDir::toNativeSeparators(fileToDownload->_file) << "can not be downloaded because of a local file name clash!";
-            abortWithError(fileToDownload, SyncFileItem::FileNameClash, tr("File %1 can not be downloaded because of a local file name clash!").arg(QDir::toNativeSeparators(fileToDownload->_file)));
+            qCWarning(lcBulkPropagatorDownloadJob) << "File" << QDir::toNativeSeparators(fileToDownload->_file)
+                                                   << "can not be downloaded because of a local file name clash!";
+            abortWithError(fileToDownload,
+                           SyncFileItem::FileNameClash,
+                           tr("File %1 can not be downloaded because of a local file name clash!").arg(QDir::toNativeSeparators(fileToDownload->_file)));
             return;
         }
     }
@@ -99,7 +117,9 @@ void BulkPropagatorDownloadJob::start()
 
     for (const auto &fileToDownload : std::as_const(_filesToDownload)) {
         if (!updateMetadata(fileToDownload)) {
-            abortWithError(fileToDownload, SyncFileItem::NormalError, tr("Unable to update metadata of new file %1.", "error with update metadata of new Win VFS file").arg(fileToDownload->_file));
+            abortWithError(fileToDownload,
+                           SyncFileItem::NormalError,
+                           tr("Unable to update metadata of new file %1.", "error with update metadata of new Win VFS file").arg(fileToDownload->_file));
             return;
         }
 
@@ -140,9 +160,10 @@ bool BulkPropagatorDownloadJob::updateMetadata(const SyncFileItemPtr &item)
         qCDebug(lcBulkPropagatorDownloadJob()) << fullFileName << "file is locked: making it read only";
         FileSystem::setFileReadOnly(fullFileName, true);
     } else {
-        qCDebug(lcBulkPropagatorDownloadJob()) << fullFileName << "file is not locked: making it" << ((!item->_remotePerm.isNull() && !item->_remotePerm.hasPermission(RemotePermissions::CanWrite))
-            ? "read only"
-            : "read write");
+        qCDebug(lcBulkPropagatorDownloadJob()) << fullFileName << "file is not locked: making it"
+                                               << ((!item->_remotePerm.isNull() && !item->_remotePerm.hasPermission(RemotePermissions::CanWrite))
+                                                       ? "read only"
+                                                       : "read write");
         FileSystem::setFileReadOnlyWeak(fullFileName, (!item->_remotePerm.isNull() && !item->_remotePerm.hasPermission(RemotePermissions::CanWrite)));
     }
     return true;

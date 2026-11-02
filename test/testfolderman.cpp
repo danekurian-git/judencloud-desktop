@@ -8,6 +8,7 @@
  * any purpose.
  */
 
+#include <QDesktopServices>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -32,6 +33,10 @@ OCSYNC_EXPORT extern std::function<Utility::LocalStorageType(const QString &)> l
 }
 #endif
 
+#ifdef Q_OS_MACOS
+#include "common/utility_mac_sandbox.h"
+#endif
+
 using namespace Qt::StringLiterals;
 using namespace OCC;
 
@@ -52,6 +57,12 @@ class TestFolderMan : public QObject
     Q_OBJECT
 
     QPointer<FolderMan> _fm;
+    QList<QUrl> _openedInternalLinks;
+
+    Q_INVOKABLE void captureInternalLink(const QUrl &url)
+    {
+        _openedInternalLinks.append(url);
+    }
 
 Q_SIGNALS:
     void incomingShareDeleted();
@@ -343,6 +354,75 @@ private Q_SLOTS:
         QCOMPARE(journal.readAll(), QByteArray("preserve-existing-journal"));
     }
 #endif
+    // Keeps tests off the device policy of the machine running them.
+    void init()
+    {
+        ConfigFile::setDeviceSourcesFactory([] {
+            return std::vector<std::unique_ptr<SettingSource>>{};
+        });
+    }
+
+    void cleanup()
+    {
+        ConfigFile::setDeviceSourcesFactory({});
+    }
+
+    void internalLinkSocketAction()
+    {
+        QTemporaryDir configDir;
+        QVERIFY(configDir.isValid());
+        ConfigFile::setConfDir(configDir.path());
+        FolderMan::resetInstance();
+        _fm = FolderMan::instance();
+        FakeFolder fakeFolder{FileInfo{}};
+        const auto cleanupFolders = qScopeGuard([this] {
+            _fm->unloadAndDeleteAllFolders();
+        });
+        const auto account = fakeFolder.account();
+        account->setUrl(QUrl{u"https://example.com/nextcloud"_s});
+        const auto folder = _fm->addFolder(&fakeFolder.accountState(), folderDefinition(fakeFolder.localPath()));
+        QVERIFY(folder);
+        folder->setSyncPaused(true);
+
+        SyncJournalFileRecord record;
+        record._path = "file.txt"_ba;
+        record._fileId = "42oc123xyz987e"_ba;
+        record._inode = 1;
+        record._modtime = QDateTime::currentSecsSinceEpoch();
+        record._type = ItemTypeFile;
+        record._etag = "etag"_ba;
+        QVERIFY(folder->journalDb()->setFileRecord(record));
+
+        _openedInternalLinks.clear();
+        QDesktopServices::setUrlHandler(u"https"_s, this, "captureInternalLink");
+        const auto cleanupHandler = qScopeGuard([] {
+            QDesktopServices::unsetUrlHandler(u"https"_s);
+        });
+        const auto openLink = [this](const QString &path) {
+            auto *listener = static_cast<OCC::SocketListener *>(nullptr);
+            return QMetaObject::invokeMethod(_fm->socketApi(),
+                                             "command_OPEN_PRIVATE_LINK",
+                                             Qt::DirectConnection,
+                                             QGenericArgument("QString", &path),
+                                             QGenericArgument("OCC::SocketListener*", &listener));
+        };
+        const auto localFile = fakeFolder.localPath() + u"file.txt"_s;
+        account->setCapabilities({});
+        QVERIFY(openLink(localFile));
+        QCOMPARE(_openedInternalLinks, QList<QUrl>{QUrl{u"https://example.com/nextcloud/index.php/f/42"_s}});
+
+        account->setCapabilities({{u"globalscale"_s, QVariantMap{{u"token"_s, u"abc123"_s}}}});
+        QVERIFY(openLink(localFile));
+        QCOMPARE(_openedInternalLinks.size(), 2);
+        QCOMPARE(_openedInternalLinks.last(), QUrl{u"https://example.com/nextcloud/index.php/gf/abc123/42"_s});
+
+        QVERIFY(openLink(configDir.path() + u"/outside.txt"_s));
+        QVERIFY(openLink(fakeFolder.localPath() + u"missing.txt"_s));
+        record._fileId.clear();
+        QVERIFY(folder->journalDb()->setFileRecord(record));
+        QVERIFY(openLink(localFile));
+        QCOMPARE(_openedInternalLinks.size(), 2);
+    }
 
     void testDeleteEncryptedFiles()
     {
@@ -953,6 +1033,59 @@ private Q_SLOTS:
 
         FolderMan::instance()->unloadAndDeleteAllFolders();
         QCOMPARE(FolderMan::instance()->map().count(), 0);
+    }
+#endif
+
+#ifdef Q_OS_MACOS
+    void testAddFolderStartsAccessFromBookmark()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.path());
+        QVERIFY(dir.isValid());
+        QVERIFY(QDir(dir.path()).mkpath(u"folder1"_s));
+        const auto localPath = dir.path() + u"/folder1"_s;
+
+        auto account = Account::create();
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        account->setUrl(QUrl(u"http://example.de"_s));
+        auto accountState = new FakeAccountState(account);
+
+        auto definition = folderDefinition(localPath);
+        definition.securityScopedBookmarkData = Utility::createSecurityScopedBookmarkData(localPath);
+        QVERIFY(!definition.securityScopedBookmarkData.isEmpty());
+
+        const auto folder = FolderMan::instance()->addFolder(accountState, definition);
+        QVERIFY(folder);
+        QVERIFY(folder->hasSecurityScopedAccess());
+        QVERIFY(!folder->needsSandboxBookmark());
+
+        FolderMan::instance()->unloadAndDeleteAllFolders();
+    }
+
+    void testAddFolderWithUnusableBookmarkNeedsSandboxBookmark()
+    {
+        FolderMan::resetInstance();
+        QTemporaryDir dir;
+        ConfigFile::setConfDir(dir.path());
+        QVERIFY(dir.isValid());
+        QVERIFY(QDir(dir.path()).mkpath(u"folder1"_s));
+
+        auto account = Account::create();
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        account->setUrl(QUrl(u"http://example.de"_s));
+        auto accountState = new FakeAccountState(account);
+
+        auto definition = folderDefinition(dir.path() + u"/folder1"_s);
+        definition.securityScopedBookmarkData = "not a bookmark"_ba;
+
+        const auto folder = FolderMan::instance()->addFolder(accountState, definition);
+        QVERIFY(folder);
+        QVERIFY(!folder->hasSecurityScopedAccess());
+        QVERIFY(folder->needsSandboxBookmark());
+        QVERIFY(!folder->canSync());
+
+        FolderMan::instance()->unloadAndDeleteAllFolders();
     }
 #endif
 };

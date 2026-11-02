@@ -11,7 +11,8 @@
 #include "ocsynclib.h"
 #include <QDebug>
 
-namespace OCC {
+namespace OCC
+{
 
 /**
  * Class that store in a memory efficient way the remote permission
@@ -24,24 +25,24 @@ private:
     quint16 _value = 0;
     static constexpr int notNullMask = 0x1;
 
-    template <typename Char> // can be 'char' or 'ushort' if conversion from QString
+    template<typename Char> // can be 'char' or 'ushort' if conversion from QString
     void fromArray(const Char *p);
 
 public:
     enum Permissions {
-        CanRead = 1,              // G
-        CanWrite,                 // W
-        CanDelete,                // D
-        CanRename,                // N
-        CanMove,                  // V
-        CanAddFile,               // C
-        CanAddSubDirectories,     // K
-        CanReshare,               // R
+        CanRead = 1, // G
+        CanWrite, // W
+        CanDelete, // D
+        CanRename, // N
+        CanMove, // V
+        CanAddFile, // C
+        CanAddSubDirectories, // K
+        CanReshare, // R
         // Note: on the server, this means SharedWithMe, but in discoveryphase.cpp we also set
         // this permission when the server reports the any "share-types"
-        IsShared,                 // S
-        IsMounted,                // M
-        IsMountedSub,             // m (internal: set if the parent dir has IsMounted)
+        IsShared, // S
+        IsMounted, // M
+        IsMountedSub, // m (internal: set if the parent dir has IsMounted)
         IsExternalStorage, // e (internal: nc:mount-type is external or external-session)
 
         // Note: when adding support for more permissions, we need to invalid the cache in the database.
@@ -74,9 +75,7 @@ public:
                                               const QMap<QString, QString> &otherProperties = {});
 
     /// read a permissions string received from the server, never null
-    static RemotePermissions fromServerString(const QString &value,
-                                              MountedPermissionAlgorithm algorithm,
-                                              const QVariantMap &otherProperties = {});
+    static RemotePermissions fromServerString(const QString &value, MountedPermissionAlgorithm algorithm, const QVariantMap &otherProperties = {});
 
     [[nodiscard]] bool hasPermission(Permissions p) const
     {
@@ -86,12 +85,8 @@ public:
     /// Returns true if the local folder needs to be read/writeable for the current remote permissions set
     [[nodiscard]] bool hasPermissionsForReadWrite() const
     {
-        return hasPermission(CanWrite) ||
-            hasPermission(CanDelete) ||
-            hasPermission(CanRename) ||
-            hasPermission(CanMove) ||
-            hasPermission(CanAddFile) ||
-            hasPermission(CanAddSubDirectories);
+        return hasPermission(CanWrite) || hasPermission(CanDelete) || hasPermission(CanRename) || hasPermission(CanMove) || hasPermission(CanAddFile)
+            || hasPermission(CanAddSubDirectories);
     }
 
     void setPermission(Permissions p)
@@ -103,7 +98,10 @@ public:
         _value &= ~(1 << static_cast<int>(p));
     }
 
-    [[nodiscard]] bool isNull() const { return !(_value & notNullMask); }
+    [[nodiscard]] bool isNull() const
+    {
+        return !(_value & notNullMask);
+    }
     friend bool operator==(RemotePermissions a, RemotePermissions b)
     {
         return a._value == b._value;
@@ -119,13 +117,9 @@ public:
     }
 
 private:
-
-    template <typename T>
-    static RemotePermissions internalFromServerString(const QString &value,
-                                                      const T&otherProperties,
-                                                      MountedPermissionAlgorithm algorithm);
+    template<typename T>
+    static RemotePermissions internalFromServerString(const QString &value, const T &otherProperties, MountedPermissionAlgorithm algorithm);
 };
-
 
 } // namespace OCC
 

@@ -52,7 +52,8 @@
 
 Q_LOGGING_CATEGORY(lcAdvancedSettings, "nextcloud.settings.advanced")
 
-namespace {
+namespace
+{
 struct ZipEntry {
     QString localFilename;
     QString zipFilename;
@@ -60,10 +61,7 @@ struct ZipEntry {
 
 ZipEntry fileInfoToZipEntry(const QFileInfo &info)
 {
-    return {
-        info.absoluteFilePath(),
-        info.fileName()
-    };
+    return {info.absoluteFilePath(), info.fileName()};
 }
 
 ZipEntry fileInfoToLogZipEntry(const QFileInfo &info)
@@ -105,19 +103,16 @@ QVector<ZipEntry> createDebugArchiveFileList()
     if (!logger->logDir().isEmpty()) {
         QDir dir(logger->logDir());
         const auto infoList = dir.entryInfoList(QDir::Files);
-        std::transform(std::cbegin(infoList), std::cend(infoList),
-                       std::back_inserter(list),
-                       fileInfoToLogZipEntry);
+        std::transform(std::cbegin(infoList), std::cend(infoList), std::back_inserter(list), fileInfoToLogZipEntry);
     } else if (!logger->logFile().isEmpty()) {
         list.append(fileInfoToZipEntry(QFileInfo(logger->logFile())));
     }
 
     const auto folders = OCC::FolderMan::instance()->map().values();
-    std::for_each(std::cbegin(folders), std::cend(folders),
-                  [&list] (auto &folderIt) {
-                      const auto &newEntries = syncFolderToDatabaseZipEntry(folderIt);
-                      std::copy(std::cbegin(newEntries), std::cend(newEntries), std::back_inserter(list));
-                  });
+    std::for_each(std::cbegin(folders), std::cend(folders), [&list](auto &folderIt) {
+        const auto &newEntries = syncFolderToDatabaseZipEntry(folderIt);
+        std::copy(std::cbegin(newEntries), std::cend(newEntries), std::back_inserter(list));
+    });
 
     return list;
 }
@@ -132,17 +127,12 @@ bool createDebugArchive(const QString &filename)
     KZip zip(tempFilePath);
 
     if (!zip.open(QIODevice::WriteOnly)) {
-        qWarning() << "Failed to open debug archive for writing:"
-                 << tempFilePath
-                 << "because of error:"
-                 << zip.errorString();
+        qWarning() << "Failed to open debug archive for writing:" << tempFilePath << "because of error:" << zip.errorString();
 
-        QMessageBox::critical(
-            nullptr,
-            QObject::tr("Failed to create debug archive"),
-            QObject::tr("Could not create debug archive in selected location!"),
-            QMessageBox::Ok
-        );
+        QMessageBox::critical(nullptr,
+                              QObject::tr("Failed to create debug archive"),
+                              QObject::tr("Could not create debug archive in selected location!"),
+                              QMessageBox::Ok);
 
         return false;
     }
@@ -156,7 +146,10 @@ bool createDebugArchive(const QString &filename)
     const auto fileProviderDomainsSupportDirectory = OCC::Mac::FileProviderUtils::fileProviderDomainsSupportDirectory();
 
     if (fileProviderDomainsSupportDirectory.exists()) {
-        QDirIterator it(fileProviderDomainsSupportDirectory.path(), QStringList() << "*.jsonl" << "*.realm", QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        QDirIterator it(fileProviderDomainsSupportDirectory.path(),
+                        QStringList() << "*.jsonl" << "*.sqlite" << "*.sqlite-wal" << "*.realm" << "*.realm.import-failed",
+                        QDir::Files | QDir::NoDotAndDotDot,
+                        QDirIterator::Subdirectories);
 
         while (it.hasNext()) {
             const auto filePath = it.next();
@@ -186,36 +179,30 @@ bool createDebugArchive(const QString &filename)
     QFile tempFile(tempFilePath);
     if (!tempFile.exists()) {
         qWarning() << "Temporary debug archive file does not exist:" << tempFilePath;
-        QMessageBox::critical(
-            nullptr,
-            QObject::tr("Failed to create debug archive"),
-            QObject::tr("Could not create debug archive in temporary location!"),
-            QMessageBox::Ok
-        );
+        QMessageBox::critical(nullptr,
+                              QObject::tr("Failed to create debug archive"),
+                              QObject::tr("Could not create debug archive in temporary location!"),
+                              QMessageBox::Ok);
         return false;
     }
 
     if (QFile::exists(filename) && !QFile::remove(filename)) {
         qWarning() << "Failed to remove existing file at destination:" << filename;
         tempFile.remove();
-        QMessageBox::critical(
-            nullptr,
-            QObject::tr("Failed to create debug archive"),
-            QObject::tr("Could not remove existing file at destination!"),
-            QMessageBox::Ok
-        );
+        QMessageBox::critical(nullptr,
+                              QObject::tr("Failed to create debug archive"),
+                              QObject::tr("Could not remove existing file at destination!"),
+                              QMessageBox::Ok);
         return false;
     }
 
     if (!tempFile.rename(filename)) {
         qWarning() << "Failed to move debug archive from" << tempFilePath << "to" << filename;
         tempFile.remove();
-        QMessageBox::critical(
-            nullptr,
-            QObject::tr("Failed to create debug archive"),
-            QObject::tr("Could not move debug archive to selected location!"),
-            QMessageBox::Ok
-        );
+        QMessageBox::critical(nullptr,
+                              QObject::tr("Failed to create debug archive"),
+                              QObject::tr("Could not move debug archive to selected location!"),
+                              QMessageBox::Ok);
         return false;
     }
 
@@ -224,7 +211,8 @@ bool createDebugArchive(const QString &filename)
 
 } // namespace
 
-namespace OCC {
+namespace OCC
+{
 
 AdvancedSettings::AdvancedSettings(QWidget *parent)
     : QWidget(parent)
@@ -248,6 +236,7 @@ AdvancedSettings::AdvancedSettings(QWidget *parent)
     _ui->moveFilesToTrashRow->setStretch(0, 1);
     _ui->showInExplorerNavigationPaneRow->setStretch(0, 1);
 
+    //: Name of the Advanced settings feature.
     auto *advancedActionsLabel = new QLabel(tr("Advanced"), this);
     advancedActionsLabel->setObjectName(QLatin1String("advancedActionsLabel"));
     _ui->advancedActionsLayout->insertWidget(0, advancedActionsLabel);
@@ -259,7 +248,10 @@ AdvancedSettings::AdvancedSettings(QWidget *parent)
     connect(_ui->newExternalStorage, &QAbstractButton::toggled, this, &AdvancedSettings::saveMiscSettings);
     connect(_ui->moveFilesToTrashCheckBox, &QAbstractButton::toggled, this, &AdvancedSettings::saveMiscSettings);
     connect(_ui->showInExplorerNavigationPaneCheckBox, &QAbstractButton::toggled, this, &AdvancedSettings::slotShowInExplorerNavigationPane);
-    connect(_ui->remotePollIntervalSpinBox, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &AdvancedSettings::slotRemotePollIntervalChanged);
+    connect(_ui->remotePollIntervalSpinBox,
+            static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged),
+            this,
+            &AdvancedSettings::slotRemotePollIntervalChanged);
     connect(_ui->ignoredFilesButton, &QAbstractButton::clicked, this, &AdvancedSettings::slotIgnoreFilesEditor);
     connect(_ui->debugArchiveButton, &QAbstractButton::clicked, this, &AdvancedSettings::slotCreateDebugArchive);
 
@@ -312,10 +304,7 @@ AdvancedSettings::~AdvancedSettings()
 
 QSize AdvancedSettings::sizeHint() const
 {
-    return {
-        ownCloudGui::settingsDialogSize().width(),
-        QWidget::sizeHint().height()
-    };
+    return {ownCloudGui::settingsDialogSize().width(), QWidget::sizeHint().height()};
 }
 
 void AdvancedSettings::loadMiscSettings()
@@ -330,12 +319,48 @@ void AdvancedSettings::loadMiscSettings()
     auto newFolderLimit = cfgFile.newBigFolderSizeLimit();
     _ui->newFolderLimitCheckBox->setChecked(newFolderLimit.first);
     _ui->newFolderLimitSpinBox->setValue(newFolderLimit.second);
+    _ui->newExternalStorage->setEnabled(true);
+    _ui->newFolderLimitCheckBox->setEnabled(true);
+    _ui->newFolderLimitSpinBox->setEnabled(true);
     _ui->existingFolderLimitCheckBox->setEnabled(_ui->newFolderLimitCheckBox->isChecked());
     _ui->existingFolderLimitLabel->setEnabled(_ui->newFolderLimitCheckBox->isChecked());
     _ui->existingFolderLimitCheckBox->setChecked(_ui->newFolderLimitCheckBox->isChecked() && cfgFile.notifyExistingFoldersOverLimit());
     _ui->stopExistingFolderNowBigSyncCheckBox->setEnabled(_ui->existingFolderLimitCheckBox->isChecked());
     _ui->stopExistingFolderNowBigSyncLabel->setEnabled(_ui->existingFolderLimitCheckBox->isChecked());
     _ui->stopExistingFolderNowBigSyncCheckBox->setChecked(_ui->existingFolderLimitCheckBox->isChecked() && cfgFile.stopSyncingExistingFoldersOverLimit());
+
+    // One label per group, so it never describes a control in another section.
+    QString folderLimitEnforcedKey;
+    QString externalStorageEnforcedKey;
+    const auto disableIfEnforced = [&cfgFile](QWidget *widget, const QString &key, QString &groupEnforcedKey) {
+        if (!cfgFile.isEnforced(key)) {
+            return;
+        }
+        widget->setEnabled(false);
+        if (groupEnforcedKey.isEmpty()) {
+            groupEnforcedKey = key;
+        }
+    };
+    disableIfEnforced(_ui->newExternalStorage, QLatin1String(ConfigFile::confirmExternalStorageC), externalStorageEnforcedKey);
+    disableIfEnforced(_ui->newFolderLimitCheckBox, QLatin1String(ConfigFile::useNewBigFolderSizeLimitC), folderLimitEnforcedKey);
+    disableIfEnforced(_ui->newFolderLimitSpinBox, QLatin1String(ConfigFile::newBigFolderSizeLimitC), folderLimitEnforcedKey);
+    disableIfEnforced(_ui->existingFolderLimitCheckBox, QLatin1String(ConfigFile::notifyExistingFoldersOverLimitC), folderLimitEnforcedKey);
+    disableIfEnforced(_ui->stopExistingFolderNowBigSyncCheckBox, QLatin1String(ConfigFile::stopSyncingExistingFoldersOverLimitC), folderLimitEnforcedKey);
+
+    const auto showEnforcedLabel = [&cfgFile](QLabel *label, const QString &key) {
+        label->setVisible(!key.isEmpty());
+        if (key.isEmpty()) {
+            return;
+        }
+        SettingsPanelStyle::applyManagedLabelStyle(label);
+        label->setText(cfgFile.sourceLabel(key));
+    };
+    showEnforcedLabel(_ui->folderLimitEnforcedLabel, folderLimitEnforcedKey);
+    showEnforcedLabel(_ui->externalStorageEnforcedLabel, externalStorageEnforcedKey);
+
+    // Grey the labels out with their controls on load, not only after a toggle.
+    _ui->existingFolderLimitLabel->setEnabled(_ui->existingFolderLimitCheckBox->isEnabled());
+    _ui->stopExistingFolderNowBigSyncLabel->setEnabled(_ui->stopExistingFolderNowBigSyncCheckBox->isEnabled());
 
     const auto interval = cfgFile.remotePollInterval();
     _ui->remotePollIntervalSpinBox->setValue(static_cast<int>(interval.count() / 1000));
@@ -354,16 +379,33 @@ void AdvancedSettings::saveMiscSettings()
     const auto existingFolderLimitEnabled = newFolderLimitEnabled && _ui->existingFolderLimitCheckBox->isChecked();
     const auto stopSyncingExistingFoldersOverLimit = existingFolderLimitEnabled && _ui->stopExistingFolderNowBigSyncCheckBox->isChecked();
 
-    cfgFile.setMoveToTrash(_ui->moveFilesToTrashCheckBox->isChecked());
-    cfgFile.setNewBigFolderSizeLimit(newFolderLimitEnabled, _ui->newFolderLimitSpinBox->value());
-    cfgFile.setConfirmExternalStorage(_ui->newExternalStorage->isChecked());
-    cfgFile.setNotifyExistingFoldersOverLimit(existingFolderLimitEnabled);
-    cfgFile.setStopSyncingExistingFoldersOverLimit(stopSyncingExistingFoldersOverLimit);
+    // Only changed controls are written. Persisting every key would turn a server default
+    // into a user value as soon as any control on the page is toggled.
+    const auto moveToTrash = _ui->moveFilesToTrashCheckBox->isChecked();
+    if (cfgFile.moveToTrash() != moveToTrash) {
+        cfgFile.setMoveToTrash(moveToTrash);
+    }
+    const auto folderSizeLimit = static_cast<qint64>(_ui->newFolderLimitSpinBox->value());
+    if (cfgFile.newBigFolderSizeLimit() != qMakePair(newFolderLimitEnabled, folderSizeLimit)) {
+        cfgFile.setNewBigFolderSizeLimit(newFolderLimitEnabled, folderSizeLimit);
+    }
+    const auto confirmExternalStorage = _ui->newExternalStorage->isChecked();
+    if (cfgFile.confirmExternalStorage() != confirmExternalStorage) {
+        cfgFile.setConfirmExternalStorage(confirmExternalStorage);
+    }
+    if (cfgFile.notifyExistingFoldersOverLimit() != existingFolderLimitEnabled) {
+        cfgFile.setNotifyExistingFoldersOverLimit(existingFolderLimitEnabled);
+    }
+    if (cfgFile.stopSyncingExistingFoldersOverLimit() != stopSyncingExistingFoldersOverLimit) {
+        cfgFile.setStopSyncingExistingFoldersOverLimit(stopSyncingExistingFoldersOverLimit);
+    }
 
-    _ui->existingFolderLimitCheckBox->setEnabled(newFolderLimitEnabled);
-    _ui->existingFolderLimitLabel->setEnabled(newFolderLimitEnabled);
-    _ui->stopExistingFolderNowBigSyncCheckBox->setEnabled(existingFolderLimitEnabled);
-    _ui->stopExistingFolderNowBigSyncLabel->setEnabled(existingFolderLimitEnabled);
+    _ui->existingFolderLimitCheckBox->setEnabled(newFolderLimitEnabled && !cfgFile.isEnforced(QLatin1String(ConfigFile::notifyExistingFoldersOverLimitC)));
+    _ui->existingFolderLimitLabel->setEnabled(newFolderLimitEnabled && !cfgFile.isEnforced(QLatin1String(ConfigFile::notifyExistingFoldersOverLimitC)));
+    _ui->stopExistingFolderNowBigSyncCheckBox->setEnabled(existingFolderLimitEnabled
+                                                          && !cfgFile.isEnforced(QLatin1String(ConfigFile::stopSyncingExistingFoldersOverLimitC)));
+    _ui->stopExistingFolderNowBigSyncLabel->setEnabled(existingFolderLimitEnabled
+                                                       && !cfgFile.isEnforced(QLatin1String(ConfigFile::stopSyncingExistingFoldersOverLimitC)));
 }
 
 void AdvancedSettings::slotShowInExplorerNavigationPane(bool checked)
@@ -389,12 +431,10 @@ void AdvancedSettings::slotIgnoreFilesEditor()
 
 void AdvancedSettings::slotCreateDebugArchive()
 {
-    const auto destination = QFileDialog::getSaveFileUrl(
-        this,
-        tr("Create Debug Archive"),
-        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
-        tr("Zip Archives") + " (*.zip)"
-    );
+    const auto destination = QFileDialog::getSaveFileUrl(this,
+                                                         tr("Create Debug Archive"),
+                                                         QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+                                                         tr("Zip Archives") + " (*.zip)");
 
     if (!destination.isLocalFile() || destination.toLocalFile().isEmpty()) {
         return;
@@ -404,21 +444,17 @@ void AdvancedSettings::slotCreateDebugArchive()
     auto scopedAccess = Utility::MacSandboxSecurityScopedAccess::create(destination);
 
     if (!scopedAccess->isValid()) {
-        QMessageBox::critical(
-            this,
-            tr("Failed to Access File"),
-            tr("Could not access the selected location. Please try again or choose a different location.")
-        );
+        QMessageBox::critical(this,
+                              tr("Failed to Access File"),
+                              tr("Could not access the selected location. Please try again or choose a different location."));
         return;
     }
 #endif
 
     if (createDebugArchive(destination.toLocalFile())) {
-        QMessageBox::information(
-            this,
-            tr("Debug Archive Created"),
-            tr("Redact information deemed sensitive before sharing! Debug archive created at %1").arg(destination.toLocalFile())
-        );
+        QMessageBox::information(this,
+                                 tr("Debug Archive Created"),
+                                 tr("Redact information deemed sensitive before sharing! Debug archive created at %1").arg(destination.toLocalFile()));
     }
 }
 

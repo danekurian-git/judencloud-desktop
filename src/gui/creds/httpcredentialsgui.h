@@ -9,7 +9,8 @@
 #include <QPointer>
 #include <QTcpServer>
 
-namespace OCC {
+namespace OCC
+{
 
 class PrivateCloudCredentialsDialog;
 
@@ -25,8 +26,7 @@ public:
         : HttpCredentials()
     {
     }
-    HttpCredentialsGui(const QString &user, const QString &password,
-            const QByteArray &clientCertBundle, const QByteArray &clientCertPassword)
+    HttpCredentialsGui(const QString &user, const QString &password, const QByteArray &clientCertBundle, const QByteArray &clientCertPassword)
         : HttpCredentials(user, password, clientCertBundle, clientCertPassword)
     {
     }

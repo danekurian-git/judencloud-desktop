@@ -26,13 +26,15 @@
 
 class ExcludedFiles;
 
-namespace OCC {
+namespace OCC
+{
 
-namespace LocalDiscoveryEnums {
+namespace LocalDiscoveryEnums
+{
 
 OCSYNC_EXPORT Q_NAMESPACE
 
-enum class LocalDiscoveryStyle {
+    enum class LocalDiscoveryStyle {
     FilesystemOnly, //< read all local data from the filesystem
     DatabaseAndFilesystem, //< read from the db, except for listed paths
 };
@@ -49,8 +51,7 @@ class ProcessDirectoryJob;
 
 enum class ErrorCategory;
 
-struct LocalInfo
-{
+struct LocalInfo {
     /** FileName of the entry (this does not contains any directory or path, just the plain name */
     QString name;
     QString caseClashConflictingName;
@@ -65,7 +66,10 @@ struct LocalInfo
     bool isMetadataMissing = false;
     bool isPermissionsInvalid = false;
     bool isLocked = false;
-    [[nodiscard]] bool isValid() const { return !name.isNull(); }
+    [[nodiscard]] bool isValid() const
+    {
+        return !name.isNull();
+    }
 };
 
 /**
@@ -95,8 +99,9 @@ private Q_SLOTS:
 private:
     QString _localPath;
     AccountPtr _account;
-    OCC::Vfs* _vfs;
+    OCC::Vfs *_vfs;
     bool _fileSystemReliablePermissions = false;
+
 public:
 };
 
@@ -114,14 +119,17 @@ public:
     explicit DiscoverySingleDirectoryJob(const AccountPtr &account,
                                          const QString &path,
                                          const QString &remoteRootFolderPath,
-        /* TODO for topLevelE2eeFolderPaths, from review: I still do not get why giving the whole QSet instead of just the parent of the folder we are in
-        sounds to me like it would be much more efficient to just have the e2ee parent folder that we are
-        inside*/
+                                         /* TODO for topLevelE2eeFolderPaths, from review: I still do not get why giving the whole QSet instead of just the
+                                         parent of the folder we are in sounds to me like it would be much more efficient to just have the e2ee parent folder
+                                         that we are inside*/
                                          const QSet<QString> &topLevelE2eeFolderPaths,
                                          SyncFileItem::EncryptionStatus parentEncryptionStatus,
                                          QObject *parent = nullptr);
     // Specify that this is the root and we need to check the data-fingerprint
-    void setIsRootPath() { _isRootPath = true; }
+    void setIsRootPath()
+    {
+        _isRootPath = true;
+    }
     void start();
     void abort();
     [[nodiscard]] bool isFileDropDetected() const;
@@ -143,11 +151,13 @@ private Q_SLOTS:
     void lsJobFinishedWithErrorSlot(QNetworkReply *reply);
     void fetchE2eMetadata();
     void metadataReceived(const QJsonDocument &json, int statusCode);
-    void metadataError(const QByteArray& fileId, int httpReturnCode);
+    void metadataError(const QByteArray &fileId, int httpReturnCode);
 
 private:
-
-    [[nodiscard]] bool isE2eEncrypted() const { return _encryptionStatusCurrent != SyncFileItem::EncryptionStatus::NotEncrypted; }
+    [[nodiscard]] bool isE2eEncrypted() const
+    {
+        return _encryptionStatusCurrent != SyncFileItem::EncryptionStatus::NotEncrypted;
+    }
 
     QVector<RemoteInfo> _results;
     QString _subPath;
@@ -246,14 +256,11 @@ class DiscoveryPhase : public QObject
     [[nodiscard]] bool activeFolderSizeLimit() const;
     [[nodiscard]] bool notifyExistingFolderOverLimit() const;
 
-    void checkFolderSizeLimit(const QString &path,
-			      const std::function<void(bool)> callback);
+    void checkFolderSizeLimit(const QString &path, const std::function<void(bool)> callback);
 
     // Check if the new folder should be deselected or not.
     // May be async. "Return" via the callback, true if the item is blacklisted
-    void checkSelectiveSyncNewFolder(const QString &path,
-                                     const RemotePermissions rp,
-                                     const std::function<void(bool)> callback);
+    void checkSelectiveSyncNewFolder(const QString &path, const RemotePermissions rp, const std::function<void(bool)> callback);
 
     void checkSelectiveSyncExistingFolder(const QString &path);
 
@@ -277,7 +284,7 @@ class DiscoveryPhase : public QObject
      */
     QPair<bool, QByteArray> findAndCancelDeletedJob(const QString &originalPath);
 
-    void enqueueDirectoryToDelete(const QString &path, ProcessDirectoryJob* const directoryJob);
+    void enqueueDirectoryToDelete(const QString &path, ProcessDirectoryJob *const directoryJob);
 
     [[nodiscard]] bool recursiveCheckForDeletedParents(const QString &itemPath) const;
 
@@ -338,9 +345,9 @@ Q_SIGNALS:
     void existingFolderNowBig(const QString &folder);
 
     /** For excluded items that don't show up in itemDiscovered()
-      *
-      * The path is relative to the sync folder, similar to item->_file
-      */
+     *
+     * The path is relative to the sync folder, similar to item->_file
+     */
     void silentlyExcluded(const QString &folderPath);
 
     void addErrorToGui(const OCC::SyncFileItem::Status status, const QString &errorMessage, const QString &subject, const OCC::ErrorCategory category);

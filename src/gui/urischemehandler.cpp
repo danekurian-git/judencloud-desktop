@@ -22,11 +22,13 @@
 #include <QSystemTrayIcon>
 #include "account.h"
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcUriSchemeHandler, "nextcloud.gui.urischemehandler", QtInfoMsg)
 
-namespace {
+namespace
+{
 
 constexpr auto openAction = "open";
 constexpr auto loginAction = "login";
@@ -34,19 +36,14 @@ constexpr auto loginServerPathPrefix = "/server:";
 
 [[nodiscard]] bool isValidServerUrl(const QUrl &serverUrl)
 {
-    return serverUrl.isValid()
-        && !serverUrl.isRelative()
-        && !serverUrl.host().isEmpty()
+    return serverUrl.isValid() && !serverUrl.isRelative() && !serverUrl.host().isEmpty()
         && (serverUrl.scheme() == QStringLiteral("http") || serverUrl.scheme() == QStringLiteral("https"));
 }
 
 [[nodiscard]] QUrl normalizedServerUrlForComparison(const QUrl &serverUrl)
 {
-    auto normalizedUrl = serverUrl.adjusted(QUrl::NormalizePathSegments
-                                            | QUrl::StripTrailingSlash
-                                            | QUrl::RemoveUserInfo
-                                            | QUrl::RemoveQuery
-                                            | QUrl::RemoveFragment);
+    auto normalizedUrl =
+        serverUrl.adjusted(QUrl::NormalizePathSegments | QUrl::StripTrailingSlash | QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
     normalizedUrl.setScheme(normalizedUrl.scheme().toCaseFolded());
     normalizedUrl.setHost(normalizedUrl.host().toCaseFolded());
 
@@ -91,8 +88,9 @@ constexpr auto loginServerPathPrefix = "/server:";
     if (!Account::enforcedServerUrl().isEmpty()) {
         return Account::isServerUrlAllowed(serverUrl);
     }
-    const auto configuredOverrideServerUrl = ConfigFile{}.overrideServerUrl();
-    if (!configuredOverrideServerUrl.isEmpty()) {
+    ConfigFile cfg;
+    if (cfg.isOverrideServerUrlLocked()) {
+        const auto configuredOverrideServerUrl = cfg.overrideServerUrl();
         const auto normalizedServerUrl = normalizedServerUrlForComparison(serverUrl);
         const auto allowedServerUrls = configuredOverrideServerUrls(configuredOverrideServerUrl);
         for (const auto &allowedServerUrl : allowedServerUrls) {
@@ -105,8 +103,7 @@ constexpr auto loginServerPathPrefix = "/server:";
     }
 
     const auto theme = Theme::instance();
-    if (theme->overrideServerUrl().isEmpty()
-        || !theme->forceOverrideServerUrl()) {
+    if (theme->overrideServerUrl().isEmpty() || !theme->forceOverrideServerUrl()) {
         return true;
     }
 
@@ -124,9 +121,7 @@ constexpr auto loginServerPathPrefix = "/server:";
 void showWarning(const QString &message)
 {
     if (auto systray = Systray::instance()) {
-        systray->showMessage(QApplication::translate("UriSchemeHandler", "Could not handle link"),
-                             message,
-                             QSystemTrayIcon::Warning);
+        systray->showMessage(QApplication::translate("UriSchemeHandler", "Could not handle link"), message, QSystemTrayIcon::Warning);
     }
 }
 

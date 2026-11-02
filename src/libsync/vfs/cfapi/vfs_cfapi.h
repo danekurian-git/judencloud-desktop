@@ -10,7 +10,10 @@
 #include "common/vfs.h"
 #include "common/plugin.h"
 
-namespace OCC {
+#include <ntstatus.h>
+
+namespace OCC
+{
 class HydrationJob;
 class VfsCfApiPrivate;
 class SyncJournalFileRecord;
@@ -39,7 +42,8 @@ public:
     bool socketApiPinStateActionsShown() const override;
     bool isHydrating() const override;
 
-    OCC::Result<ConvertToPlaceholderResult, QString> updateMetadata(const SyncFileItem &syncItem, const QString &filePath, const QString &replacesFile) override;
+    OCC::Result<ConvertToPlaceholderResult, QString>
+    updateMetadata(const SyncFileItem &syncItem, const QString &filePath, const QString &replacesFile) override;
 
     Result<Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderMarkInSync(const QString &filePath, const SyncFileItem &item) override;
 
@@ -49,11 +53,13 @@ public:
     Result<void, QString> createPlaceholders(const QList<SyncFileItemPtr> &items) override;
 
     Result<void, QString> dehydratePlaceholder(const SyncFileItem &item) override;
-    Result<Vfs::ConvertToPlaceholderResult, QString> convertToPlaceholder(const QString &filename, const SyncFileItem &item, const QString &replacesFile, UpdateMetadataTypes updateType) override;
+    Result<Vfs::ConvertToPlaceholderResult, QString>
+    convertToPlaceholder(const QString &filename, const SyncFileItem &item, const QString &replacesFile, UpdateMetadataTypes updateType) override;
 
     bool needsMetadataUpdate(const SyncFileItem &) override;
     bool isDehydratedPlaceholder(const QString &filePath) override;
     bool statTypeVirtualFile(csync_file_stat_t *stat, void *statData) override;
+    [[nodiscard]] HydrationJob *hydrateFile(const QByteArray &fileId, const QString &targetPath) override;
 
     bool setPinState(const QString &folderPath, PinState state) override;
     Optional<PinState> pinState(const QString &folderPath) override;
@@ -63,8 +69,7 @@ public:
 
     int finalizeHydrationJob(const QString &requestId);
 
-    int finalizeNewPlaceholders(const QList<OCC::PlaceholderCreateInfo> &newEntries,
-                                const QString &pathString);
+    int finalizeNewPlaceholders(const QList<OCC::PlaceholderCreateInfo> &newEntries, const QString &pathString);
 
 public Q_SLOTS:
     void requestHydration(const QString &requestId, const QString &path);
@@ -104,6 +109,14 @@ class CfApiVfsPluginFactory : public QObject, public DefaultPluginFactory<VfsCfA
     Q_OBJECT
     Q_PLUGIN_METADATA(IID "org.owncloud.PluginFactory" FILE "vfspluginmetadata.json")
     Q_INTERFACES(OCC::PluginFactory)
+
+public:
+    /**
+     * @param path The path for which the plugin should be prepared
+     * @param accountUuid The UUID of the account for which the plugin should be prepared (might be null during account setup)
+     * @return Nothing or an error string
+     */
+    [[nodiscard]] Result<void, QString> prepare(const QString &path, const QUuid &accountUuid) const override;
 };
 
 } // namespace OCC

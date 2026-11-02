@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
  * SPDX-License-Identifier: CC0-1.0
- * 
+ *
  * This software is in the public domain, furnished "as is", without technical
  * support, and with no warranty, express or implied, as to its usefulness for
  * any purpose.
@@ -35,7 +35,8 @@ OCSYNC_EXPORT extern std::function<Utility::LocalStorageType(const QString &)> l
 using namespace OCC;
 using namespace Qt::StringLiterals;
 
-namespace {
+namespace
+{
 
 QStringList findCaseClashConflicts(const FileInfo &dir)
 {
@@ -89,7 +90,7 @@ bool itemDidCompleteSuccessfullyWithExpectedRank(const ItemCompletedSpy &spy, co
 
 int itemSuccessfullyCompletedGetRank(const ItemCompletedSpy &spy, const QString &path)
 {
-    auto itItem = std::find_if(spy.begin(), spy.end(), [&path] (auto currentItem) {
+    auto itItem = std::find_if(spy.begin(), spy.end(), [&path](auto currentItem) {
         auto item = currentItem[0].template value<OCC::SyncFileItemPtr>();
         return item->destination() == path;
     });
@@ -99,7 +100,8 @@ int itemSuccessfullyCompletedGetRank(const ItemCompletedSpy &spy, const QString 
     return -1;
 }
 
-constexpr quint64 operator""_MiB(quint64 value) {
+constexpr quint64 operator""_MiB(quint64 value)
+{
     return value * 1024LL * 1024LL;
 }
 
@@ -165,7 +167,8 @@ private Q_SLOTS:
     }
 #endif
 
-    void testFileDownload() {
+    void testFileDownload()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.remoteModifier().insert("A/a0");
@@ -174,7 +177,8 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testFileUpload() {
+    void testFileUpload()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.localModifier().insert("A/a0");
@@ -183,7 +187,8 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testDirDownload() {
+    void testDirDownload()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.remoteModifier().mkdir("Y");
@@ -196,7 +201,8 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testDirUpload() {
+    void testDirUpload()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.localModifier().mkdir("Y");
@@ -209,11 +215,12 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testDirUploadWithDelayedAlgorithm() {
+    void testDirUploadWithDelayedAlgorithm()
+    {
         QSKIP("bulk upload is disabled");
 
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"bulkupload", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"bulkupload", "1.0"}}}});
 
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.localModifier().mkdir("Y");
@@ -242,12 +249,13 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testDirUploadWithDelayedAlgorithmWithNewChecksum() {
+    void testDirUploadWithDelayedAlgorithmWithNewChecksum()
+    {
         QSKIP("bulk upload is disabled");
 
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         fakeFolder.setServerVersion(QStringLiteral("32.0.0"));
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"bulkupload", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"bulkupload", "1.0"}}}});
 
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.localModifier().mkdir("Y");
@@ -275,7 +283,6 @@ private Q_SLOTS:
         QVERIFY(itemSuccessfullyCompletedGetRank(completeSpy, "r1") > 1);
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
-
 
     void testLocalDelete_data()
     {
@@ -284,7 +291,8 @@ private Q_SLOTS:
         QTest::newRow("delete") << false;
     }
 
-    void testLocalDelete() {
+    void testLocalDelete()
+    {
         QFETCH(bool, moveToTrashEnabled);
 
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
@@ -300,7 +308,8 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testRemoteDelete() {
+    void testRemoteDelete()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.localModifier().remove("A/a1");
@@ -316,7 +325,8 @@ private Q_SLOTS:
         QTest::newRow("delete") << false;
     }
 
-    void testEmlLocalChecksum() {
+    void testEmlLocalChecksum()
+    {
         FakeFolder fakeFolder{FileInfo{}};
         fakeFolder.localModifier().insert("a1.eml", 64, 'A');
         fakeFolder.localModifier().insert("a2.eml", 64, 'A');
@@ -359,36 +369,28 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testSelectiveSyncBug() {
+    void testSelectiveSyncBug()
+    {
         // issue owncloud/enterprise#1965: files from selective-sync ignored
         // folders are uploaded anyway is some circumstances.
-        FakeFolder fakeFolder{FileInfo{ QString(), {
-            FileInfo { QStringLiteral("parentFolder"), {
-                FileInfo{ QStringLiteral("subFolderA"), {
-                    { QStringLiteral("fileA.txt"), 400 },
-                    { QStringLiteral("fileB.txt"), 400, 'o' },
-                    FileInfo { QStringLiteral("subsubFolder"), {
-                        { QStringLiteral("fileC.txt"), 400 },
-                        { QStringLiteral("fileD.txt"), 400, 'o' }
-                    }},
-                    FileInfo{ QStringLiteral("anotherFolder"), {
-                        FileInfo { QStringLiteral("emptyFolder"), { } },
-                        FileInfo { QStringLiteral("subsubFolder"), {
-                            { QStringLiteral("fileE.txt"), 400 },
-                            { QStringLiteral("fileF.txt"), 400, 'o' }
-                        }}
-                    }}
-                }},
-                FileInfo{ QStringLiteral("subFolderB"), {} }
-            }}
-        }}};
+        FakeFolder fakeFolder{FileInfo{
+            QString(),
+            {FileInfo{QStringLiteral("parentFolder"),
+                      {FileInfo{QStringLiteral("subFolderA"),
+                                {{QStringLiteral("fileA.txt"), 400},
+                                 {QStringLiteral("fileB.txt"), 400, 'o'},
+                                 FileInfo{QStringLiteral("subsubFolder"), {{QStringLiteral("fileC.txt"), 400}, {QStringLiteral("fileD.txt"), 400, 'o'}}},
+                                 FileInfo{QStringLiteral("anotherFolder"),
+                                          {FileInfo{QStringLiteral("emptyFolder"), {}},
+                                           FileInfo{QStringLiteral("subsubFolder"),
+                                                    {{QStringLiteral("fileE.txt"), 400}, {QStringLiteral("fileF.txt"), 400, 'o'}}}}}}},
+                       FileInfo{QStringLiteral("subFolderB"), {}}}}}}};
 
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
         auto expectedServerState = fakeFolder.currentRemoteState();
 
         // Remove subFolderA with selectiveSync:
-        fakeFolder.syncEngine().journal()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList,
-                                                                {"parentFolder/subFolderA/"});
+        fakeFolder.syncEngine().journal()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, {"parentFolder/subFolderA/"});
         fakeFolder.syncEngine().journal()->schedulePathForRemoteDiscovery(QByteArrayLiteral("parentFolder/subFolderA/"));
         auto getEtag = [&](const QByteArray &file) {
             SyncJournalFileRecord rec;
@@ -430,7 +432,8 @@ private Q_SLOTS:
         }
     }
 
-    void abortAfterFailedMkdir() {
+    void abortAfterFailedMkdir()
+    {
         FakeFolder fakeFolder{FileInfo{}};
         QSignalSpy finishedSpy(&fakeFolder.syncEngine(), &SyncEngine::finished);
         fakeFolder.serverErrorPaths().append("NewFolder");
@@ -444,7 +447,8 @@ private Q_SLOTS:
 
     /** Verify that an incompletely propagated directory doesn't have the server's
      * etag stored in the database yet. */
-    void testDirEtagAfterIncompleteSync() {
+    void testDirEtagAfterIncompleteSync()
+    {
         FakeFolder fakeFolder{FileInfo{}};
         QSignalSpy finishedSpy(&fakeFolder.syncEngine(), &SyncEngine::finished);
         fakeFolder.serverErrorPaths().append("NewFolder/foo");
@@ -458,7 +462,8 @@ private Q_SLOTS:
         QVERIFY(!rec._fileId.isEmpty());
     }
 
-    void testDirDownloadWithError() {
+    void testDirDownloadWithError()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.remoteModifier().mkdir("Y");
@@ -479,7 +484,7 @@ private Q_SLOTS:
         QCoreApplication::processEvents(); // should not crash
 
         QSet<QString> seen;
-        for(const QList<QVariant> &args : completeSpy) {
+        for (const QList<QVariant> &args : completeSpy) {
             auto item = args[0].value<SyncFileItemPtr>();
             qDebug() << item->_file << item->isDirectory() << item->_status;
             QVERIFY(!seen.contains(item->_file)); // signal only sent once per item
@@ -501,38 +506,21 @@ private Q_SLOTS:
 
         QTest::addColumn<int>("expectedGET");
 
-        QTest::newRow("Same mtime, but no server checksum -> ignored in reconcile")
-            << true << QByteArray()
-            << 1;
+        QTest::newRow("Same mtime, but no server checksum -> ignored in reconcile") << true << QByteArray() << 1;
 
-        QTest::newRow("Same mtime, weak server checksum differ -> downloaded")
-            << true << QByteArray("Adler32:bad")
-            << 1;
+        QTest::newRow("Same mtime, weak server checksum differ -> downloaded") << true << QByteArray("Adler32:bad") << 1;
 
-        QTest::newRow("Same mtime, matching weak checksum -> skipped")
-            << true << QByteArray("Adler32:2a2010d")
-            << 0;
+        QTest::newRow("Same mtime, matching weak checksum -> skipped") << true << QByteArray("Adler32:2a2010d") << 0;
 
-        QTest::newRow("Same mtime, strong server checksum differ -> downloaded")
-            << true << QByteArray("SHA1:bad")
-            << 1;
+        QTest::newRow("Same mtime, strong server checksum differ -> downloaded") << true << QByteArray("SHA1:bad") << 1;
 
-        QTest::newRow("Same mtime, matching strong checksum -> skipped")
-            << true << QByteArray("SHA1:56900fb1d337cf7237ff766276b9c1e8ce507427")
-            << 0;
+        QTest::newRow("Same mtime, matching strong checksum -> skipped") << true << QByteArray("SHA1:56900fb1d337cf7237ff766276b9c1e8ce507427") << 0;
 
+        QTest::newRow("mtime changed, but no server checksum -> download") << false << QByteArray() << 1;
 
-        QTest::newRow("mtime changed, but no server checksum -> download")
-            << false << QByteArray()
-            << 1;
+        QTest::newRow("mtime changed, weak checksum match -> download anyway") << false << QByteArray("Adler32:2a2010d") << 1;
 
-        QTest::newRow("mtime changed, weak checksum match -> download anyway")
-            << false << QByteArray("Adler32:2a2010d")
-            << 1;
-
-        QTest::newRow("mtime changed, strong checksum match -> skip")
-            << false << QByteArray("SHA1:56900fb1d337cf7237ff766276b9c1e8ce507427")
-            << 0;
+        QTest::newRow("mtime changed, strong checksum match -> skip") << false << QByteArray("SHA1:56900fb1d337cf7237ff766276b9c1e8ce507427") << 0;
     }
 
     void testFakeConflict()
@@ -541,7 +529,7 @@ private Q_SLOTS:
         QFETCH(QByteArray, checksums);
         QFETCH(int, expectedGET);
 
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
 
         int nGET = 0;
         fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &, QIODevice *) {
@@ -601,8 +589,7 @@ private Q_SLOTS:
         initialFileInfo.setModTime("B/b1", initialMtime);
         initialFileInfo.setModTime("C/c1", initialMtime);
 
-        FakeFolder fakeFolder{ initialFileInfo };
-
+        FakeFolder fakeFolder{initialFileInfo};
 
         // upload a
         fakeFolder.localModifier().appendByte("A/a1");
@@ -668,7 +655,7 @@ private Q_SLOTS:
      */
     void testInsufficientRemoteStorage()
     {
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
 
         // Disable parallel uploads
         SyncOptions syncOptions;
@@ -716,7 +703,7 @@ private Q_SLOTS:
     // Checks whether downloads with bad checksums are accepted
     void testChecksumValidation()
     {
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         QObject parent;
 
         QByteArray checksumValue;
@@ -792,7 +779,7 @@ private Q_SLOTS:
         checksumValue = "Unsupported:XXXX SHA1:invalid Invalid:XxX";
         fakeFolder.remoteModifier().create("A/a8", 16, 'A');
         QVERIFY(!fakeFolder.syncOnce()); // Since the supported SHA1 checksum is invalid, no download
-        checksumValue =  "Unsupported:XXXX SHA1:19b1928d58a2030d08023f3d7054516dbc186f20 Invalid:XxX";
+        checksumValue = "Unsupported:XXXX SHA1:19b1928d58a2030d08023f3d7054516dbc186f20 Invalid:XxX";
         QVERIFY(fakeFolder.syncOnce()); // The supported SHA1 checksum is valid now, so the file are downloaded
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
 
@@ -829,9 +816,9 @@ private Q_SLOTS:
     // Tests the behavior of invalid filename detection
     void testInvalidFilenameRegex()
     {
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
 
-#ifndef Q_OS_WIN  // We can't have local file with these character
+#ifndef Q_OS_WIN // We can't have local file with these character
         // For current servers, no characters are forbidden
         fakeFolder.syncEngine().account()->setServerVersion("10.0.0");
         fakeFolder.localModifier().insert("A/\\:?*\"<>|.txt");
@@ -846,13 +833,13 @@ private Q_SLOTS:
 #endif
 
         // We can override that by setting the capability
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ { "invalidFilenameRegex", "" } } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"invalidFilenameRegex", ""}}}});
         QVERIFY(fakeFolder.syncOnce());
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
 
         // Check that new servers also accept the capability
         fakeFolder.syncEngine().account()->setServerVersion("10.0.0");
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ { "invalidFilenameRegex", "my[fgh]ile" } } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"invalidFilenameRegex", "my[fgh]ile"}}}});
         fakeFolder.localModifier().insert("C/myfile.txt");
         QVERIFY(fakeFolder.syncOnce());
         QVERIFY(!fakeFolder.currentRemoteState().find("C/myfile.txt"));
@@ -860,7 +847,7 @@ private Q_SLOTS:
 
     void testDiscoveryHiddenFile()
     {
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         QVERIFY(fakeFolder.syncOnce());
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
 
@@ -891,7 +878,7 @@ private Q_SLOTS:
             QSKIP("Test only works for UTF8 locale");
         }
 
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         QVERIFY(fakeFolder.syncOnce());
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
 
@@ -933,17 +920,11 @@ private Q_SLOTS:
             QVERIFY(fakeFolder.syncOnce());
             QVERIFY(fakeFolder.currentRemoteState().find("C/tößt"));
 
-        }
-        catch (const std::filesystem::filesystem_error &e)
-        {
+        } catch (const std::filesystem::filesystem_error &e) {
             qCritical() << e.what() << e.path1().c_str() << e.path2().c_str() << e.code().message().c_str();
-        }
-        catch (const std::system_error &e)
-        {
+        } catch (const std::system_error &e) {
             qCritical() << e.what() << e.code().message().c_str();
-        }
-        catch (...)
-        {
+        } catch (...) {
             qCritical() << "exception unknown";
         }
         QTextCodec::setCodecForLocale(utf8Locale);
@@ -953,7 +934,7 @@ private Q_SLOTS:
     // Aborting has had bugs when there are parallel upload jobs
     void testUploadV1Multiabort()
     {
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
         SyncOptions options;
         options._initialChunkSize = 10;
         options.setMaxChunkSize(10);
@@ -971,7 +952,9 @@ private Q_SLOTS:
         });
 
         fakeFolder.localModifier().insert("file", 100, 'W');
-        QTimer::singleShot(100, &fakeFolder.syncEngine(), [&]() { fakeFolder.syncEngine().abort(); });
+        QTimer::singleShot(100, &fakeFolder.syncEngine(), [&]() {
+            fakeFolder.syncEngine().abort();
+        });
         QVERIFY(!fakeFolder.syncOnce());
 
         QCOMPARE(nPUT, 3);
@@ -1001,20 +984,19 @@ private Q_SLOTS:
 
     void testEmptyLocalButHasRemote()
     {
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
         fakeFolder.remoteModifier().mkdir("foo");
 
         QVERIFY(fakeFolder.syncOnce());
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
 
         QVERIFY(fakeFolder.currentLocalState().find("foo"));
-
     }
 
     // Check that server mtime is set on directories on initial propagation
     void testDirectoryInitialMtime()
     {
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
         fakeFolder.remoteModifier().mkdir("foo");
         fakeFolder.remoteModifier().insert("foo/bar");
         auto datetime = QDateTime::currentDateTime();
@@ -1057,8 +1039,8 @@ private Q_SLOTS:
     {
         QSKIP("bulk upload is disabled");
 
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"bulkupload", "1.0"} } } });
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"bulkupload", "1.0"}}}});
 
         // Disable parallel uploads
         SyncOptions syncOptions;
@@ -1073,25 +1055,22 @@ private Q_SLOTS:
                 ++nPOST;
                 if (contentType.startsWith(QStringLiteral("multipart/related; boundary="))) {
                     auto hasAnError = false;
-                    auto jsonReplyObject = fakeFolder.forEachReplyPart(outgoingData, contentType, [&hasAnError] (const QMap<QString, QByteArray> &allHeaders) -> QJsonObject {
-                        auto reply = QJsonObject{};
-                        const auto fileName = allHeaders[QStringLiteral("x-file-path")];
-                        if (fileName.endsWith("A/big2") ||
-                                fileName.endsWith("A/big3") ||
-                                fileName.endsWith("A/big4") ||
-                                fileName.endsWith("A/big5") ||
-                                fileName.endsWith("A/big7") ||
-                                fileName.endsWith("B/big8")) {
-                            hasAnError = true;
-                            reply.insert(QStringLiteral("error"), true);
-                            reply.insert(QStringLiteral("etag"), {});
+                    auto jsonReplyObject =
+                        fakeFolder.forEachReplyPart(outgoingData, contentType, [&hasAnError](const QMap<QString, QByteArray> &allHeaders) -> QJsonObject {
+                            auto reply = QJsonObject{};
+                            const auto fileName = allHeaders[QStringLiteral("x-file-path")];
+                            if (fileName.endsWith("A/big2") || fileName.endsWith("A/big3") || fileName.endsWith("A/big4") || fileName.endsWith("A/big5")
+                                || fileName.endsWith("A/big7") || fileName.endsWith("B/big8")) {
+                                hasAnError = true;
+                                reply.insert(QStringLiteral("error"), true);
+                                reply.insert(QStringLiteral("etag"), {});
+                                return reply;
+                            } else {
+                                reply.insert(QStringLiteral("error"), false);
+                                reply.insert(QStringLiteral("etag"), {});
+                            }
                             return reply;
-                        } else {
-                            reply.insert(QStringLiteral("error"), false);
-                            reply.insert(QStringLiteral("etag"), {});
-                        }
-                        return reply;
-                    });
+                        });
                     if (jsonReplyObject.size()) {
                         auto jsonReply = QJsonDocument{};
                         jsonReply.setObject(jsonReplyObject);
@@ -1101,22 +1080,18 @@ private Q_SLOTS:
                             return new FakeJsonReply{op, request, this, 200, jsonReply};
                         }
                     }
-                    return  nullptr;
+                    return nullptr;
                 }
             } else if (op == QNetworkAccessManager::PutOperation) {
                 ++nPUT;
                 const auto fileName = getFilePathFromUrl(request.url());
-                if (fileName.endsWith("A/big2") ||
-                        fileName.endsWith("A/big3") ||
-                        fileName.endsWith("A/big4") ||
-                        fileName.endsWith("A/big5") ||
-                        fileName.endsWith("A/big7") ||
-                        fileName.endsWith("B/big8")) {
+                if (fileName.endsWith("A/big2") || fileName.endsWith("A/big3") || fileName.endsWith("A/big4") || fileName.endsWith("A/big5")
+                    || fileName.endsWith("A/big7") || fileName.endsWith("B/big8")) {
                     return new FakeErrorReply(op, request, this, 412);
                 }
-                return  nullptr;
+                return nullptr;
             }
-            return  nullptr;
+            return nullptr;
         });
 
         fakeFolder.localModifier().insert("A/big", 1);
@@ -1154,8 +1129,8 @@ private Q_SLOTS:
     {
         QSKIP("bulk upload is disabled");
 
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"bulkupload", "1.0"} } } });
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"bulkupload", "1.0"}}}});
 
         // Disable parallel uploads
         SyncOptions syncOptions;
@@ -1171,11 +1146,11 @@ private Q_SLOTS:
                 if (contentType.startsWith(QStringLiteral("multipart/related; boundary="))) {
                     return new FakeErrorReply(op, request, this, 400);
                 }
-                return  nullptr;
+                return nullptr;
             } else if (op == QNetworkAccessManager::PutOperation) {
                 ++nPUT;
             }
-            return  nullptr;
+            return nullptr;
         });
 
         fakeFolder.localModifier().insert("A/big1", 1);
@@ -1204,8 +1179,8 @@ private Q_SLOTS:
     {
         QSKIP("bulk upload is disabled");
 
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"bulkupload", "1.0"} } } });
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"bulkupload", "1.0"}}}});
 
         int nPUT = 0;
         int nPOST = 0;
@@ -1214,47 +1189,43 @@ private Q_SLOTS:
             if (op == QNetworkAccessManager::PostOperation) {
                 ++nPOST;
                 if (contentType.startsWith(QStringLiteral("multipart/related; boundary="))) {
-                    auto jsonReplyObject = fakeFolder.forEachReplyPart(outgoingData, contentType, [] (const QMap<QString, QByteArray> &allHeaders) -> QJsonObject {
-                        auto reply = QJsonObject{};
-                        const auto fileName = allHeaders[QStringLiteral("X-File-Path")];
-                        if(fileName.endsWith("B/small30") ||
-                            fileName.endsWith("B/small60") ||
-                            fileName.endsWith("B/big30") ||
-                            fileName.endsWith("B/big60")) {
-                            reply.insert(QStringLiteral("error"), true);
-                            reply.insert(QStringLiteral("etag"), {});
+                    auto jsonReplyObject =
+                        fakeFolder.forEachReplyPart(outgoingData, contentType, [](const QMap<QString, QByteArray> &allHeaders) -> QJsonObject {
+                            auto reply = QJsonObject{};
+                            const auto fileName = allHeaders[QStringLiteral("X-File-Path")];
+                            if (fileName.endsWith("B/small30") || fileName.endsWith("B/small60") || fileName.endsWith("B/big30")
+                                || fileName.endsWith("B/big60")) {
+                                reply.insert(QStringLiteral("error"), true);
+                                reply.insert(QStringLiteral("etag"), {});
+                                return reply;
+                            } else {
+                                reply.insert(QStringLiteral("error"), false);
+                                reply.insert(QStringLiteral("etag"), {});
+                            }
                             return reply;
-                        } else {
-                            reply.insert(QStringLiteral("error"), false);
-                            reply.insert(QStringLiteral("etag"), {});
-                        }
-                        return reply;
-                    });
+                        });
                     if (jsonReplyObject.size()) {
                         auto jsonReply = QJsonDocument{};
                         jsonReply.setObject(jsonReplyObject);
                         return new FakeJsonErrorReply{op, request, this, 200, jsonReply};
                     }
-                    return  nullptr;
+                    return nullptr;
                 }
             } else if (op == QNetworkAccessManager::PutOperation) {
                 ++nPUT;
                 const auto fileName = getFilePathFromUrl(request.url());
-                if (fileName.endsWith("B/small30") ||
-                    fileName.endsWith("B/small60") ||
-                    fileName.endsWith("B/big30") ||
-                    fileName.endsWith("B/big60")) {
+                if (fileName.endsWith("B/small30") || fileName.endsWith("B/small60") || fileName.endsWith("B/big30") || fileName.endsWith("B/big60")) {
                     return new FakeErrorReply(op, request, this, 504);
                 }
-                return  nullptr;
+                return nullptr;
             }
-            return  nullptr;
+            return nullptr;
         });
 
         const auto smallSize = 0.5 * 1000 * 1000;
         const auto bigSize = 10 * 1000 * 1000;
 
-        for(auto i = 0 ; i < 120; ++i) {
+        for (auto i = 0; i < 120; ++i) {
             fakeFolder.localModifier().insert(QString("A/small%1").arg(i), smallSize);
         }
 
@@ -1264,7 +1235,7 @@ private Q_SLOTS:
         nPUT = 0;
         nPOST = 0;
 
-        for(auto i = 0 ; i < 120; ++i) {
+        for (auto i = 0; i < 120; ++i) {
             fakeFolder.localModifier().insert(QString("B/small%1").arg(i), smallSize);
             fakeFolder.localModifier().insert(QString("B/big%1").arg(i), bigSize);
         }
@@ -1298,19 +1269,15 @@ private Q_SLOTS:
 
         // try to move from a big shared folder to your own folder
         fakeFolder.localModifier().mkdir("own_folder");
-        fakeFolder.localModifier().rename(
-            "big_shared_folder/shared_files/big_shared_file_A.data", "own_folder/big_shared_file_A.data");
-        fakeFolder.localModifier().rename(
-            "big_shared_folder/shared_files/big_shared_file_B.data", "own_folder/big_shared_file_B.data");
+        fakeFolder.localModifier().rename("big_shared_folder/shared_files/big_shared_file_A.data", "own_folder/big_shared_file_A.data");
+        fakeFolder.localModifier().rename("big_shared_folder/shared_files/big_shared_file_B.data", "own_folder/big_shared_file_B.data");
 
         // emulate server MOVE 507 error
         QObject parent;
-        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request,
-                                         QIODevice *outgoingData) -> QNetworkReply * {
+        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *outgoingData) -> QNetworkReply * {
             Q_UNUSED(outgoingData)
 
-            if (op == QNetworkAccessManager::CustomOperation
-                && request.attribute(QNetworkRequest::CustomVerbAttribute).toString() == QStringLiteral("MOVE")) {
+            if (op == QNetworkAccessManager::CustomOperation && request.attribute(QNetworkRequest::CustomVerbAttribute).toString() == QStringLiteral("MOVE")) {
                 return new FakeErrorReply(op, request, &parent, 507);
             }
             return nullptr;
@@ -1347,21 +1314,17 @@ private Q_SLOTS:
 
         // try to move from a big shared folder to your own folder
         fakeFolder.localModifier().mkdir("own_folder");
-        fakeFolder.localModifier().rename(
-            "big_shared_folder/shared_files/big_shared_file_A.data", "own_folder/big_shared_file_A.data");
-        fakeFolder.localModifier().rename(
-            "big_shared_folder/shared_files/big_shared_file_B.data", "own_folder/big_shared_file_B.data");
+        fakeFolder.localModifier().rename("big_shared_folder/shared_files/big_shared_file_A.data", "own_folder/big_shared_file_A.data");
+        fakeFolder.localModifier().rename("big_shared_folder/shared_files/big_shared_file_B.data", "own_folder/big_shared_file_B.data");
 
         // emulate server MOVE 507 error
         QObject parent;
-        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request,
-                                         QIODevice *outgoingData) -> QNetworkReply * {
+        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *outgoingData) -> QNetworkReply * {
             Q_UNUSED(outgoingData)
 
             auto attributeCustomVerb = request.attribute(QNetworkRequest::CustomVerbAttribute).toString();
 
-            if (op == QNetworkAccessManager::CustomOperation
-                && request.attribute(QNetworkRequest::CustomVerbAttribute).toString() == QStringLiteral("MOVE")) {
+            if (op == QNetworkAccessManager::CustomOperation && request.attribute(QNetworkRequest::CustomVerbAttribute).toString() == QStringLiteral("MOVE")) {
                 return new FakeErrorReply(op, request, &parent, 403);
             }
             return nullptr;
@@ -1536,7 +1499,7 @@ private Q_SLOTS:
 
         FakeFolder fakeFolder{FileInfo{}};
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"bulkupload", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"bulkupload", "1.0"}}}});
 
         fakeFolder.localModifier().insert(QStringLiteral("invalid"));
         fakeFolder.localModifier().setModTime("invalid", INVALID_MTIME);
@@ -1567,7 +1530,7 @@ private Q_SLOTS:
         constexpr auto testFile = "test.txt";
         constexpr auto CURRENT_MTIME = 1646057277;
 
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
 
         fakeFolder.remoteModifier().insert(testFile);
         fakeFolder.remoteModifier().setModTimeKeepEtag(testFile, QDateTime::fromSecsSinceEpoch(CURRENT_MTIME - 2));
@@ -1651,7 +1614,7 @@ private Q_SLOTS:
         constexpr auto shouldHaveCaseClashConflict = true;
 #endif
 
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
 
         fakeFolder.remoteModifier().insert("otherFile.txt");
         fakeFolder.remoteModifier().insert(testLowerCaseFile);
@@ -1683,7 +1646,7 @@ private Q_SLOTS:
         constexpr auto shouldHaveCaseClashConflict = true;
 #endif
 
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
 
         fakeFolder.remoteModifier().mkdir("a");
         fakeFolder.remoteModifier().mkdir("a/b");
@@ -1718,7 +1681,7 @@ private Q_SLOTS:
         constexpr auto shouldHaveCaseClashConflict = true;
 #endif
 
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
 
         fakeFolder.remoteModifier().insert("otherFile.txt");
         fakeFolder.remoteModifier().insert(testLowerCaseFile);
@@ -1761,7 +1724,7 @@ private Q_SLOTS:
         constexpr auto shouldHaveCaseClashConflict = true;
 #endif
 
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
 
         fakeFolder.remoteModifier().mkdir("a");
         fakeFolder.remoteModifier().mkdir("a/b");
@@ -1805,7 +1768,7 @@ private Q_SLOTS:
         constexpr auto shouldHaveCaseClashConflict = true;
 #endif
 
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
 
         fakeFolder.remoteModifier().insert("otherFile.txt");
         fakeFolder.remoteModifier().insert(testLowerCaseFile);
@@ -1860,7 +1823,7 @@ private Q_SLOTS:
         constexpr auto shouldHaveCaseClashConflict = true;
 #endif
 
-        FakeFolder fakeFolder{ FileInfo{} };
+        FakeFolder fakeFolder{FileInfo{}};
 
         fakeFolder.remoteModifier().mkdir("a");
         fakeFolder.remoteModifier().mkdir("a/b");
@@ -2143,7 +2106,8 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
-    void testFileDownloadWithUnicodeCharacterInName() {
+    void testFileDownloadWithUnicodeCharacterInName()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
         ItemCompletedSpy completeSpy(fakeFolder);
         fakeFolder.remoteModifier().insert("A/abcdęfg.txt");
@@ -2255,10 +2219,16 @@ private Q_SLOTS:
         fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef");
         fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd");
         fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1");
-        fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1");
-        fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc");
-        fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd");
-        fakeFolder.remoteModifier().insert("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.lnk");
+        fakeFolder.remoteModifier().mkdir(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1");
+        fakeFolder.remoteModifier().mkdir(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc");
+        fakeFolder.remoteModifier().mkdir(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd");
+        fakeFolder.remoteModifier().insert(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.lnk");
 
         fakeFolder.remoteModifier().mkdir("folder");
         fakeFolder.remoteModifier().insert("folder/file1.lnk");
@@ -2275,14 +2245,32 @@ private Q_SLOTS:
         fakeFolder.remoteModifier().find("folder/file3.lnk")->permissions = RemotePermissions::fromServerString("SG");
 
         fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd")->permissions = RemotePermissions::fromServerString("DNVSG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.lnk")->permissions = RemotePermissions::fromServerString("SG");
+        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a")->permissions =
+            RemotePermissions::fromServerString("DNVSG");
+        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef")->permissions =
+            RemotePermissions::fromServerString("DNVSG");
+        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd")->permissions =
+            RemotePermissions::fromServerString("DNVSG");
+        fakeFolder.remoteModifier()
+            .find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1")
+            ->permissions = RemotePermissions::fromServerString("DNVSG");
+        fakeFolder.remoteModifier()
+            .find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1")
+            ->permissions = RemotePermissions::fromServerString("DNVSG");
+        fakeFolder.remoteModifier()
+            .find(
+                "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc")
+            ->permissions = RemotePermissions::fromServerString("DNVSG");
+        fakeFolder.remoteModifier()
+            .find(
+                "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+                "abcdef1/12abcabc/12abcabd")
+            ->permissions = RemotePermissions::fromServerString("DNVSG");
+        fakeFolder.remoteModifier()
+            .find(
+                "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+                "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.lnk")
+            ->permissions = RemotePermissions::fromServerString("SG");
 
         QVERIFY(fakeFolder.syncOnce());
     }
@@ -2297,10 +2285,16 @@ private Q_SLOTS:
         fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef");
         fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd");
         fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1");
-        fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1");
-        fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc");
-        fakeFolder.remoteModifier().mkdir("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd");
-        fakeFolder.remoteModifier().insert("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
+        fakeFolder.remoteModifier().mkdir(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1");
+        fakeFolder.remoteModifier().mkdir(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc");
+        fakeFolder.remoteModifier().mkdir(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd");
+        fakeFolder.remoteModifier().insert(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
 
         fakeFolder.remoteModifier().mkdir("folder");
         fakeFolder.remoteModifier().insert("folder/file1.lnk");
@@ -2319,39 +2313,70 @@ private Q_SLOTS:
         fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd")->permissions = RemotePermissions::fromServerString("DNVSG");
 
         fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a")->permissions = RemotePermissions::fromServerString("SG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef")->permissions = RemotePermissions::fromServerString("SG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd")->permissions = RemotePermissions::fromServerString("SG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1")->permissions = RemotePermissions::fromServerString("SG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1")->permissions = RemotePermissions::fromServerString("SG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc")->permissions = RemotePermissions::fromServerString("SG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd")->permissions = RemotePermissions::fromServerString("SG");
-        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md")->permissions = RemotePermissions::fromServerString("GS");
+        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef")->permissions =
+            RemotePermissions::fromServerString("SG");
+        fakeFolder.remoteModifier().find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd")->permissions =
+            RemotePermissions::fromServerString("SG");
+        fakeFolder.remoteModifier()
+            .find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1")
+            ->permissions = RemotePermissions::fromServerString("SG");
+        fakeFolder.remoteModifier()
+            .find("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1")
+            ->permissions = RemotePermissions::fromServerString("SG");
+        fakeFolder.remoteModifier()
+            .find(
+                "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc")
+            ->permissions = RemotePermissions::fromServerString("SG");
+        fakeFolder.remoteModifier()
+            .find(
+                "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+                "abcdef1/12abcabc/12abcabd")
+            ->permissions = RemotePermissions::fromServerString("SG");
+        fakeFolder.remoteModifier()
+            .find(
+                "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+                "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md")
+            ->permissions = RemotePermissions::fromServerString("GS");
 
         QVERIFY(fakeFolder.syncOnce());
 
-        fakeFolder.remoteModifier().remove("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
+        fakeFolder.remoteModifier().remove(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
 
         QVERIFY(fakeFolder.syncOnce());
 
-        fakeFolder.remoteModifier().insert("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
+        fakeFolder.remoteModifier().insert(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
 
         QVERIFY(fakeFolder.syncOnce());
 
-        fakeFolder.remoteModifier().rename("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md",
-                                           "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long hello.docx - Sh.md");
+        fakeFolder.remoteModifier().rename(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md",
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long hello.docx - Sh.md");
 
         QVERIFY(fakeFolder.syncOnce());
 
-        fakeFolder.remoteModifier().rename("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long hello.docx - Sh.md",
-                                           "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/this is a long long long long long long long long long long hello.docx - Sh.md");
+        fakeFolder.remoteModifier().rename(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long hello.docx - Sh.md",
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/this "
+            "is a long long long long long long long long long long hello.docx - Sh.md");
 
         QVERIFY(fakeFolder.syncOnce());
 
-        fakeFolder.remoteModifier().appendByte("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/this is a long long long long long long long long long long hello.docx - Sh.md");
+        fakeFolder.remoteModifier().appendByte(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/this "
+            "is a long long long long long long long long long long hello.docx - Sh.md");
 
         QVERIFY(fakeFolder.syncOnce());
 
-        fakeFolder.remoteModifier().remove("abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
+        fakeFolder.remoteModifier().remove(
+            "abcdefabcdefabcdefabcdefabcdefabcd/abcdef abcdef abcdef a/abcdef abcdef/abcdef acbdef abcd/123abcdefabcdef1/123123abcdef123 "
+            "abcdef1/12abcabc/12abcabd/this is a long long long long long long long long long long long long long long long long l.docx - Sh.md");
 
         QVERIFY(fakeFolder.syncOnce());
     }
@@ -2411,7 +2436,9 @@ private Q_SLOTS:
 
         completeSpy.clear();
 
-        fakeFolder.syncEngine().setLocalDiscoveryOptions(LocalDiscoveryStyle::DatabaseAndFilesystem, {QStringLiteral("foo"), QStringLiteral("bar"), QStringLiteral("bla"), QStringLiteral("A/foo"), QStringLiteral("A/bar"), QStringLiteral("A/bla")});
+        fakeFolder.syncEngine().setLocalDiscoveryOptions(
+            LocalDiscoveryStyle::DatabaseAndFilesystem,
+            {QStringLiteral("foo"), QStringLiteral("bar"), QStringLiteral("bla"), QStringLiteral("A/foo"), QStringLiteral("A/bar"), QStringLiteral("A/bla")});
         QVERIFY(fakeFolder.syncOnce());
 
         QCOMPARE(completeSpy.findItem(fileWithSpaces1)->_status, SyncFileItem::Status::NoStatus);
@@ -2446,7 +2473,7 @@ private Q_SLOTS:
         // syncEngine->_propagator is only set during a sync, which doesn't work with QSignalSpy :(
         connect(&fakeFolder.syncEngine(), &SyncEngine::started, this, [&]() {
             // at this point we have a propagator to connect signals to
-            connect(fakeFolder.syncEngine().getPropagator().get(), &OwncloudPropagator::touchedFile, this, [&touchedFiles](const QString& fileName) {
+            connect(fakeFolder.syncEngine().getPropagator().get(), &OwncloudPropagator::touchedFile, this, [&touchedFiles](const QString &fileName) {
                 touchedFiles.append(fileName);
             });
         });
@@ -2544,7 +2571,7 @@ private Q_SLOTS:
         // considers the upload to be done.
 
         FakeFolder fakeFolder{FileInfo{}};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         QVERIFY(fakeFolder.syncOnce());
 
         const auto changemePath = fakeFolder.localPath().append("/changeme");

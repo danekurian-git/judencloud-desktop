@@ -21,7 +21,8 @@
 
 using namespace QKeychain;
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcHttpCredentialsGui, "nextcloud.sync.credentials.http.gui", QtInfoMsg)
 
@@ -83,19 +84,14 @@ void HttpCredentialsGui::showDialog()
                      "<br>"
                      "Username: %2<br>"
                      "Account: %3<br>")
-                      .arg(Utility::escape(Theme::instance()->appNameGUI()),
-                          Utility::escape(_user),
-                          Utility::escape(_account->displayName()));
+                      .arg(Utility::escape(Theme::instance()->appNameGUI()), Utility::escape(_user), Utility::escape(_account->displayName()));
 
     QString reqTxt = requestAppPasswordText(_account);
     if (!reqTxt.isEmpty()) {
         msg += QLatin1String("<br>") + reqTxt + QLatin1String("<br>");
     }
     if (!_fetchErrorString.isEmpty()) {
-        msg += QLatin1String("<br>")
-            + tr("Reading from keychain failed with error: \"%1\"")
-                  .arg(Utility::escape(_fetchErrorString))
-            + QLatin1String("<br>");
+        msg += QLatin1String("<br>") + tr("Reading from keychain failed with error: \"%1\"").arg(Utility::escape(_fetchErrorString)) + QLatin1String("<br>");
     }
 
     auto *dialog = new QInputDialog();
@@ -138,7 +134,6 @@ QString HttpCredentialsGui::requestAppPasswordText(const Account *account)
         return QString();
     }
 
-    return tr("<a href=\"%1\">Click here</a> to request an app password from the web interface.")
-        .arg(url);
+    return tr("<a href=\"%1\">Click here</a> to request an app password from the web interface.").arg(url);
 }
 } // namespace OCC

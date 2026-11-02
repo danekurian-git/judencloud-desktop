@@ -38,7 +38,7 @@ using namespace Qt::StringLiterals;
 
 using namespace OCC;
 
-class TestFolder: public QObject
+class TestFolder : public QObject
 {
     Q_OBJECT
 
@@ -68,7 +68,10 @@ private Q_SLOTS:
         class RecoverableVfs final : public VfsOff
         {
         public:
-            bool isReady() const override { return ready; }
+            bool isReady() const override
+            {
+                return ready;
+            }
             bool ready = false;
             int starts = 0;
 
@@ -87,9 +90,13 @@ private Q_SLOTS:
         QVERIFY(otherDirectory.isValid());
         const auto originalConfig = ConfigFile().configPath();
         QVERIFY(ConfigFile::setConfDir(configDirectory.path()));
-        const auto restoreConfig = qScopeGuard([originalConfig] { ConfigFile::setConfDir(originalConfig); });
+        const auto restoreConfig = qScopeGuard([originalConfig] {
+            ConfigFile::setConfDir(originalConfig);
+        });
         QScopedValueRollback storageScope(localStorageTypeOverride);
-        localStorageTypeOverride = [](const QString &) { return Utility::LocalStorageType::Internal; };
+        localStorageTypeOverride = [](const QString &) {
+            return Utility::LocalStorageType::Internal;
+        };
         const auto account = Account::create();
         const auto serverUrl = Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl();
         QVERIFY(account->setUrl(serverUrl));
@@ -227,7 +234,7 @@ private Q_SLOTS:
             return AccountManager::instance()->addAccount(account);
         };
 
-        const auto createFolder = [](AccountState * const accountState, const QString &targetPath, const QString &alias) -> Folder {
+        const auto createFolder = [](AccountState *const accountState, const QString &targetPath, const QString &alias) -> Folder {
             FolderDefinition definition;
             definition.localPath = QTemporaryDir().path(); // for these tests the local folder path doesn't matter
             definition.targetPath = targetPath; // also known as the remote path

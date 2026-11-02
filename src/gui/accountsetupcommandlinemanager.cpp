@@ -83,7 +83,7 @@ bool AccountSetupCommandLineManager::parseCommandlineOption(const QString &optio
         } else {
             errorMessage = QStringLiteral("isvfsenabled not specified");
         }
-    } 
+    }
     return false;
 }
 
@@ -99,8 +99,7 @@ bool AccountSetupCommandLineManager::isVfsEnabled() const
 
 bool AccountSetupCommandLineManager::setupAccountFromCommandLine()
 {
-    const auto cleanUpState = [this] () -> void
-    {
+    const auto cleanUpState = [this]() -> void {
         _appPassword.clear();
         _userId.clear();
         _serverUrl.clear();
@@ -110,13 +109,16 @@ bool AccountSetupCommandLineManager::setupAccountFromCommandLine()
     };
 
     if (isCommandLineParsed()) {
-        qCInfo(lcAccountSetupCommandLineManager) << QStringLiteral("Command line has been parsed and account setup parameters have been found. Attempting setup a new account %1...").arg(_userId);
-        const auto accountSetupJob = new AccountSetupFromCommandLineJob(_appPassword, _userId, _serverUrl, _localDirPath, _isVfsEnabled, _remoteDirPath, parent());
+        qCInfo(lcAccountSetupCommandLineManager)
+            << QStringLiteral("Command line has been parsed and account setup parameters have been found. Attempting setup a new account %1...").arg(_userId);
+        const auto accountSetupJob =
+            new AccountSetupFromCommandLineJob(_appPassword, _userId, _serverUrl, _localDirPath, _isVfsEnabled, _remoteDirPath, parent());
         const auto result = accountSetupJob->handleAccountSetupFromCommandLine();
         cleanUpState();
         return result;
     } else {
-        qCInfo(lcAccountSetupCommandLineManager) << QStringLiteral("No account setup parameters have been found, or they are invalid. Proceed with normal startup...");
+        qCInfo(lcAccountSetupCommandLineManager) << QStringLiteral(
+            "No account setup parameters have been found, or they are invalid. Proceed with normal startup...");
         cleanUpState();
         return false;
     }

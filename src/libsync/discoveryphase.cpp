@@ -33,7 +33,8 @@
 
 using namespace Qt::StringLiterals;
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcDiscovery, "nextcloud.sync.discovery", QtInfoMsg)
 
@@ -86,12 +87,9 @@ void DiscoveryPhase::checkFolderSizeLimit(const QString &path, const std::functi
     propfindJob->start();
 }
 
-void DiscoveryPhase::checkSelectiveSyncNewFolder(const QString &path,
-                                                 const RemotePermissions remotePerm,
-                                                 const std::function<void(bool)> callback)
+void DiscoveryPhase::checkSelectiveSyncNewFolder(const QString &path, const RemotePermissions remotePerm, const std::function<void(bool)> callback)
 {
-    if (_syncOptions._confirmExternalStorage && _syncOptions._vfs->mode() == Vfs::Off
-        && remotePerm.hasPermission(RemotePermissions::IsMounted)) {
+    if (_syncOptions._confirmExternalStorage && _syncOptions._vfs->mode() == Vfs::Off && remotePerm.hasPermission(RemotePermissions::IsMounted)) {
         // external storage.
 
         /* Note: DiscoverySingleDirectoryJob::directoryListingIteratedSlot make sure that only the
@@ -175,9 +173,8 @@ QPair<bool, QByteArray> DiscoveryPhase::findAndCancelDeletedJob(const QString &o
             result = true;
             oldEtag = (*it)->_etag;
         } else {
-            if (!(instruction == CSYNC_INSTRUCTION_REMOVE ||
-                  instruction == CSYNC_INSTRUCTION_IGNORE ||
-                  ((*it)->_type == ItemTypeVirtualFile && instruction == CSYNC_INSTRUCTION_NEW) ||// re-creation of virtual files count as a delete
+            if (!(instruction == CSYNC_INSTRUCTION_REMOVE || instruction == CSYNC_INSTRUCTION_IGNORE
+                  || ((*it)->_type == ItemTypeVirtualFile && instruction == CSYNC_INSTRUCTION_NEW) || // re-creation of virtual files count as a delete
                   ((*it)->_isRestoration && instruction == CSYNC_INSTRUCTION_NEW))) {
                 qCWarning(lcDiscovery) << "ENFORCE(FAILING)" << originalPath;
                 qCWarning(lcDiscovery) << "instruction == CSYNC_INSTRUCTION_REMOVE" << (instruction == CSYNC_INSTRUCTION_REMOVE);
@@ -189,7 +186,10 @@ QPair<bool, QByteArray> DiscoveryPhase::findAndCancelDeletedJob(const QString &o
                 qCWarning(lcDiscovery) << "(*it)->_type" << (*it)->_type;
                 qCWarning(lcDiscovery) << "(*it)->_isRestoration " << (*it)->_isRestoration;
                 Q_ASSERT(false);
-                Q_EMIT addErrorToGui(SyncFileItem::Status::FatalError, tr("Error while canceling deletion of a file"), originalPath, ErrorCategory::GenericError);
+                Q_EMIT addErrorToGui(SyncFileItem::Status::FatalError,
+                                     tr("Error while canceling deletion of a file"),
+                                     originalPath,
+                                     ErrorCategory::GenericError);
                 Q_EMIT fatalError(tr("Error while canceling deletion of %1").arg(originalPath), ErrorCategory::GenericError);
             }
             (*it)->_instruction = CSYNC_INSTRUCTION_NONE;
@@ -203,18 +203,15 @@ QPair<bool, QByteArray> DiscoveryPhase::findAndCancelDeletedJob(const QString &o
         delete otherJob;
         result = true;
     }
-    return { result, oldEtag };
+    return {result, oldEtag};
 }
 
-void DiscoveryPhase::enqueueDirectoryToDelete(const QString &path, ProcessDirectoryJob* const directoryJob)
+void DiscoveryPhase::enqueueDirectoryToDelete(const QString &path, ProcessDirectoryJob *const directoryJob)
 {
     _queuedDeletedDirectories[path] = directoryJob;
 
-    if (directoryJob->_dirItem &&
-        directoryJob->_dirItem->_isRestoration &&
-        directoryJob->_dirItem->_direction == SyncFileItem::Down &&
-        directoryJob->_dirItem->_instruction == CSYNC_INSTRUCTION_NEW) {
-
+    if (directoryJob->_dirItem && directoryJob->_dirItem->_isRestoration && directoryJob->_dirItem->_direction == SyncFileItem::Down
+        && directoryJob->_dirItem->_instruction == CSYNC_INSTRUCTION_NEW) {
         _directoryNamesToRestoreOnPropagation.push_back(path);
     }
 }
@@ -255,7 +252,8 @@ void DiscoveryPhase::markPermanentDeletionRequests()
 
         auto item = *it;
         if (!(item->_instruction == CSYNC_INSTRUCTION_REMOVE || item->_direction == SyncFileItem::Up)) {
-            qCInfo(lcDiscovery) << "will not request permanent deletion for" << originalPath << "as the instruction is not CSYNC_INSTRUCTION_REMOVE, or the direction is not Up";
+            qCInfo(lcDiscovery) << "will not request permanent deletion for" << originalPath
+                                << "as the instruction is not CSYNC_INSTRUCTION_REMOVE, or the direction is not Up";
             continue;
         }
 
@@ -337,11 +335,12 @@ DiscoverySingleLocalDirectoryJob::DiscoverySingleLocalDirectoryJob(const Account
     , _vfs{vfs}
     , _fileSystemReliablePermissions{fileSystemReliablePermissions}
 {
-    qRegisterMetaType<QVector<OCC::LocalInfo> >("QVector<OCC::LocalInfo>");
+    qRegisterMetaType<QVector<OCC::LocalInfo>>("QVector<OCC::LocalInfo>");
 }
 
 // Use as QRunnable
-void DiscoverySingleLocalDirectoryJob::run() {
+void DiscoverySingleLocalDirectoryJob::run()
+{
     QString localPath = _localPath;
     if (localPath.endsWith('/')) { // Happens if _currentFolder._local.isEmpty()
         localPath.chop(1);
@@ -385,8 +384,8 @@ void DiscoverySingleLocalDirectoryJob::run() {
         if (state.invalidChars > 0 || state.remainingChars > 0) {
             Q_EMIT childIgnored(true);
             auto item = SyncFileItemPtr::create();
-            //item->_file = _currentFolder._target + i.name;
-            // FIXME ^^ do we really need to use _target or is local fine?
+            // item->_file = _currentFolder._target + i.name;
+            //  FIXME ^^ do we really need to use _target or is local fine?
             item->_file = _localPath + i.name;
             item->_instruction = CSYNC_INSTRUCTION_IGNORE;
             item->_status = SyncFileItem::NormalError;
@@ -453,12 +452,10 @@ void DiscoverySingleDirectoryJob::start()
     // Start the actual HTTP job
     auto *lsColJob = new LsColJob(_account, _subPath);
 
-    const auto props = LsColJob::defaultProperties(_isRootPath ? LsColJob::FolderType::RootFolder : LsColJob::FolderType::ChildFolder,
-                                                   _account);
+    const auto props = LsColJob::defaultProperties(_isRootPath ? LsColJob::FolderType::RootFolder : LsColJob::FolderType::ChildFolder, _account);
     lsColJob->setProperties(props);
 
-    QObject::connect(lsColJob, &LsColJob::directoryListingIterated,
-        this, &DiscoverySingleDirectoryJob::directoryListingIteratedSlot);
+    QObject::connect(lsColJob, &LsColJob::directoryListingIterated, this, &DiscoverySingleDirectoryJob::directoryListingIteratedSlot);
     QObject::connect(lsColJob, &LsColJob::finishedWithError, this, &DiscoverySingleDirectoryJob::lsJobFinishedWithErrorSlot);
     QObject::connect(lsColJob, &LsColJob::finishedWithoutError, this, &DiscoverySingleDirectoryJob::lsJobFinishedWithoutErrorSlot);
     lsColJob->start();
@@ -500,8 +497,10 @@ void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &fi
         _ignoredFirst = true;
         if (map.contains("permissions")) {
             const auto perm = RemotePermissions::fromServerString(map.value("permissions"),
-                                                            _account->serverHasMountRootProperty() ? RemotePermissions::MountedPermissionAlgorithm::UseMountRootProperty : RemotePermissions::MountedPermissionAlgorithm::WildGuessMountedSubProperty,
-                                                            map);
+                                                                  _account->serverHasMountRootProperty()
+                                                                      ? RemotePermissions::MountedPermissionAlgorithm::UseMountRootProperty
+                                                                      : RemotePermissions::MountedPermissionAlgorithm::WildGuessMountedSubProperty,
+                                                                  map);
             Q_EMIT firstDirectoryPermissions(perm);
             _isExternalStorage = perm.hasPermission(RemotePermissions::IsExternalStorage);
         }
@@ -537,7 +536,7 @@ void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &fi
         }
 
         // all folders will contain both
-        if (map.contains(FolderQuota::usedBytesC) && map.contains(FolderQuota::availableBytesC)) {          
+        if (map.contains(FolderQuota::usedBytesC) && map.contains(FolderQuota::availableBytesC)) {
             // The server can respond with e.g. "2.58440798353E+12" for the quota
             // therefore: parse the string as a double and cast it to i64
             auto ok = false;
@@ -546,9 +545,7 @@ void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &fi
             quotaValue = static_cast<int64_t>(map.value(FolderQuota::availableBytesC).toDouble(&ok));
             _folderQuota.bytesAvailable = ok ? quotaValue : -1;
 
-            qCDebug(lcDiscovery) << "Setting quota for" << file
-                                 << "bytesUsed:" << _folderQuota.bytesUsed
-                                 << "bytesAvailable:" << _folderQuota.bytesAvailable
+            qCDebug(lcDiscovery) << "Setting quota for" << file << "bytesUsed:" << _folderQuota.bytesUsed << "bytesAvailable:" << _folderQuota.bytesAvailable
                                  << "ok:" << ok;
             Q_EMIT setfolderQuota(_folderQuota);
         }
@@ -558,7 +555,8 @@ void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &fi
         result.name = file.mid(slash + 1);
         result.size = -1;
         LsColJob::propertyMapToRemoteInfo(map,
-                                          _account->serverHasMountRootProperty() ? RemotePermissions::MountedPermissionAlgorithm::UseMountRootProperty : RemotePermissions::MountedPermissionAlgorithm::WildGuessMountedSubProperty,
+                                          _account->serverHasMountRootProperty() ? RemotePermissions::MountedPermissionAlgorithm::UseMountRootProperty
+                                                                                 : RemotePermissions::MountedPermissionAlgorithm::WildGuessMountedSubProperty,
                                           result);
         if (result.isDirectory) {
             result.size = 0;
@@ -567,7 +565,7 @@ void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &fi
         _results.push_back(std::move(result));
     }
 
-    //This works in concerto with the RequestEtagJob and the Folder object to check if the remote folder changed.
+    // This works in concerto with the RequestEtagJob and the Folder object to check if the remote folder changed.
     if (map.contains("getetag"_L1)) {
         if (_firstEtag.isEmpty()) {
             _firstEtag = parseEtag(map.value("getetag"_L1).toUtf8()); // for directory itself
@@ -580,11 +578,11 @@ void DiscoverySingleDirectoryJob::lsJobFinishedWithoutErrorSlot()
     if (!_ignoredFirst) {
         // This is a sanity check, if we haven't _ignoredFirst then it means we never received any directoryListingIteratedSlot
         // which means somehow the server XML was bogus
-        Q_EMIT finished(HttpError{ 0, tr("Server error: PROPFIND reply is not XML formatted!") });
+        Q_EMIT finished(HttpError{0, tr("Server error: PROPFIND reply is not XML formatted!")});
         deleteLater();
         return;
     } else if (!_error.isEmpty()) {
-        Q_EMIT finished(HttpError{ 0, _error });
+        Q_EMIT finished(HttpError{0, _error});
         deleteLater();
         return;
     } else if (!_isExternalStorage && isE2eEncrypted() && _account->capabilities().clientSideEncryptionAvailable()) {
@@ -600,10 +598,8 @@ void DiscoverySingleDirectoryJob::lsJobFinishedWithoutErrorSlot()
 void DiscoverySingleDirectoryJob::lsJobFinishedWithErrorSlot(QNetworkReply *reply)
 {
     const auto contentType = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-    const auto invalidContentType = !contentType.contains("application/xml; charset=utf-8") &&
-                                    !contentType.contains("application/xml; charset=\"utf-8\"") &&
-                                    !contentType.contains("text/xml; charset=utf-8") &&
-                                    !contentType.contains("text/xml; charset=\"utf-8\"");
+    const auto invalidContentType = !contentType.contains("application/xml; charset=utf-8") && !contentType.contains("application/xml; charset=\"utf-8\"")
+        && !contentType.contains("text/xml; charset=utf-8") && !contentType.contains("text/xml; charset=\"utf-8\"");
     const auto httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     auto errorString = _lsColJob->errorString();
 
@@ -618,17 +614,15 @@ void DiscoverySingleDirectoryJob::lsJobFinishedWithErrorSlot(QNetworkReply *repl
         Q_EMIT _account->termsOfServiceNeedToBeChecked();
     }
 
-    Q_EMIT finished(HttpError{ httpCode, errorString });
+    Q_EMIT finished(HttpError{httpCode, errorString});
     deleteLater();
 }
 
 void DiscoverySingleDirectoryJob::fetchE2eMetadata()
 {
     const auto job = new GetMetadataApiJob(_account, _localFileId);
-    connect(job, &GetMetadataApiJob::jsonReceived,
-            this, &DiscoverySingleDirectoryJob::metadataReceived);
-    connect(job, &GetMetadataApiJob::error,
-            this, &DiscoverySingleDirectoryJob::metadataError);
+    connect(job, &GetMetadataApiJob::jsonReceived, this, &DiscoverySingleDirectoryJob::metadataReceived);
+    connect(job, &GetMetadataApiJob::error, this, &DiscoverySingleDirectoryJob::metadataError);
     job->start();
 }
 
@@ -686,12 +680,7 @@ void DiscoverySingleDirectoryJob::metadataReceived(const QJsonDocument &json, in
     const auto folderType = _topLevelE2eeFolderPaths.contains(_subPath) ? FolderMetadata::FolderType::Root : FolderMetadata::FolderType::Nested;
     Q_ASSERT((folderType == FolderMetadata::FolderType::Root) == (rootEncryptedFolderInfo.path == QStringLiteral("/")));
 
-    const auto e2EeFolderMetadata = new FolderMetadata(_account,
-                                                       _remoteRootFolderPath,
-                                                       jsonMetadata,
-                                                       rootEncryptedFolderInfo,
-                                                       job->signature(),
-                                                       folderType);
+    const auto e2EeFolderMetadata = new FolderMetadata(_account, _remoteRootFolderPath, jsonMetadata, rootEncryptedFolderInfo, job->signature(), folderType);
     connect(e2EeFolderMetadata, &FolderMetadata::setupComplete, this, [this, e2EeFolderMetadata] {
         e2EeFolderMetadata->deleteLater();
         if (!e2EeFolderMetadata->isValid()) {

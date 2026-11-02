@@ -18,17 +18,26 @@
 #include <memory>
 
 #include "accountfwd.h"
+#include "configfile.h"
 #include "creds/flow2auth.h"
 #include "networkjobs.h"
 
 class QNetworkReply;
+class QWindow;
 
-namespace OCC {
+namespace OCC
+{
 
 class SelectiveSyncDialog;
 class AccountState;
 class PrivateCloudAuthentication;
 class Folder;
+class FolderDefinition;
+
+namespace Utility
+{
+class MacSandboxPersistentAccess;
+}
 
 /**
  * Backend for the QML account wizard.
@@ -110,12 +119,18 @@ public:
     enum SyncMode {
         SyncEverything = 0,
         SelectiveSync,
-        VirtualFiles
+        VirtualFiles,
     };
     Q_ENUM(SyncMode)
 
     explicit AccountWizardController(QObject *parent = nullptr);
     ~AccountWizardController() override;
+
+    /** @brief Sets the wizard window that native panels are attached to. */
+    void setWindow(QWindow *window);
+
+    /** @brief Result to report when the wizard window closes: accepted once setup has completed. */
+    [[nodiscard]] int resultOnClose() const;
 
     [[nodiscard]] Step currentStep() const;
     [[nodiscard]] QString serverUrl() const;
@@ -263,10 +278,16 @@ private Q_SLOTS:
 
 private:
     using LocalNetworkPermissionCheck = std::function<void(const QUrl &, QObject *, std::function<void(bool)>)>;
+    // Reports the chosen folder, or an empty path when cancelled, and its security-scoped bookmark if any.
+    using LocalSyncFolderPicker = std::function<void(const QString &, const QString &, std::function<void(const QString &, const QByteArray &)>)>;
 
     friend class AccountWizardControllerTestAccess;
 
     [[nodiscard]] bool resumePrivateCloudSetup(Folder *folder);
+    void pickLocalSyncFolder(const QString &caption, const QString &startFolder, std::function<void(const QString &, const QByteArray &)> completion);
+
+    // The wizard account is not registered yet, so its own server settings have to be used.
+    [[nodiscard]] ManagedVirtualFilesMode accountManagedVirtualFilesMode() const;
     void initialiseAccount();
     void ensureAccount();
     void initialiseOverrideServerChoices();
@@ -275,12 +296,14 @@ private:
     void connectToAuthenticatedAccount(const QString &url, const QString &user, const QString &appPassword);
     void testOwnCloudConnect();
     void completeAuthentication();
+    void chooseSyncModeAfterCapabilities();
     void fetchUserAvatar();
     void fetchRootFolderSize();
     AccountState *applyAccountChanges();
     void clearOneShotOverrides();
+    [[nodiscard]] QString applicableOverrideLocalDir() const;
     void initialiseLocalSyncFolder();
-    void setLocalSyncFolder(const QString &localSyncFolder, bool selectedByUser = false);
+    void setLocalSyncFolder(const QString &localSyncFolder, bool selectedByUser = false, const QByteArray &bookmarkData = {});
     void promptForInitialLocalSyncFolderIfNeeded();
     void validateLocalSyncFolder();
     [[nodiscard]] qint64 availableLocalSpace() const;
@@ -290,7 +313,8 @@ private:
     void createRemoteFolder();
     void completeRemoteFolderCheck();
     [[nodiscard]] bool createSyncFolder(AccountState *accountState);
-    [[nodiscard]] QString openLocalSyncFolderDialog(bool initialSelection) const;
+    [[nodiscard]] FolderDefinition syncFolderDefinition() const;
+    void openLocalSyncFolderDialog(bool initialSelection);
     [[nodiscard]] QUrl localFolderServerUrl() const;
     [[nodiscard]] QString sanitizedRemoteFolderEntityPath() const;
     void setCurrentStep(Step step);
@@ -307,6 +331,7 @@ private:
     void setPublicShareSetup(bool publicShareSetup);
     void setServerUrlEditable(bool editable);
     void emitProxySettingsChangedIfNeeded(bool previousValidity, bool previousLocalhostWarning);
+    void seedProxySettingsFromManagedDefault();
     void discardFlow2Auth();
     [[nodiscard]] bool checkDowngradeAdvised(QNetworkReply *reply) const;
     void handleFailedServerConnection(const QUrl &url, bool retryHttpOnly);
@@ -317,8 +342,9 @@ private:
     bool _privateCloudMode = false;
     bool _cancelled = false;
     std::function<QString(const QString &)> _privateCloudAvailabilityCheck;
-    std::function<QString(const QString &)> _localSyncFolderDialog;
     QPointer<Folder> _privateCloudFolder;
+    LocalSyncFolderPicker _localSyncFolderPicker;
+    QPointer<QWindow> _window;
     std::unique_ptr<Flow2Auth> _flow2Auth;
     std::unique_ptr<PrivateCloudAuthentication> _privateCloudAuthentication;
     QPointer<SelectiveSyncDialog> _selectiveSyncDialog;
@@ -326,8 +352,7 @@ private:
         AuthenticationRequired,
         NoAuthentication,
     };
-    struct WizardProxySettings
-    {
+    struct WizardProxySettings {
         QString _user;
         QString _password;
         QString _host;
@@ -351,6 +376,10 @@ private:
     QString _avatarUrl;
     QString _syncEverythingDescription;
     QString _localSyncFolder;
+    QByteArray _localSyncFolderBookmarkData;
+#ifdef Q_OS_MACOS
+    std::unique_ptr<Utility::MacSandboxPersistentAccess> _localSyncFolderAccess;
+#endif
     QString _localSyncFolderError;
     QString _localSyncFolderFreeSpace;
     bool _localSyncFolderValid = false;
@@ -360,6 +389,7 @@ private:
     bool _localSyncFolderPickerOpen = false;
     SyncMode _syncMode = SyncEverything;
     bool _needsSyncOptions = false;
+    bool _syncModeChosen = false;
     bool _askBeforeLargeFolders = true;
     int _largeFolderThresholdMb = 500;
     bool _askBeforeExternalStorage = true;

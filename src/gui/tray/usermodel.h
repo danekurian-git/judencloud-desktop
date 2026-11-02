@@ -26,7 +26,8 @@
 #include "userstatusselectormodel.h"
 #include <chrono>
 
-namespace OCC {
+namespace OCC
+{
 
 class TrayFolderInfo
 {
@@ -37,7 +38,10 @@ class TrayFolderInfo
     Q_PROPERTY(QString fullPath MEMBER _fullPath)
     Q_PROPERTY(bool isGroupFolder READ isGroupFolder CONSTANT)
 public:
-    enum FolderType { Folder, GroupFolder };
+    enum FolderType {
+        Folder,
+        GroupFolder,
+    };
 
     TrayFolderInfo(const QString &name, const QString &parentPath, const QString &fullPath, FolderType folderType);
     TrayFolderInfo() = default;
@@ -154,7 +158,11 @@ public Q_SLOTS:
     void slotItemCompleted(const QString &folder, const OCC::SyncFileItemPtr &item);
     void slotProgressInfo(const QString &folder, const OCC::ProgressInfo &progress);
     void slotAddError(const QString &folderAlias, const QString &message, OCC::ErrorCategory category);
-    void slotAddErrorToGui(const QString &folderAlias, const OCC::SyncFileItem::Status status, const QString &errorMessage, const QString &subject, const OCC::ErrorCategory category);
+    void slotAddErrorToGui(const QString &folderAlias,
+                           const OCC::SyncFileItem::Status status,
+                           const QString &errorMessage,
+                           const QString &subject,
+                           const OCC::ErrorCategory category);
     void slotAddNotification(const OCC::Folder *folder, const OCC::Activity &activity);
     void slotNotificationRequestFinished(int statusCode);
     void slotNotifyNetworkError(QNetworkReply *reply);
@@ -186,7 +194,11 @@ public Q_SLOTS:
     /// Surface a single item refused by the server quota as a per-item entry in the activity
     /// view. Connected from `Mac::FileProviderService::insufficientQuotaForItem`.
     /// See https://github.com/nextcloud/desktop/issues/9598.
-    void slotFileProviderInsufficientQuotaForItem(const QString &domainIdentifier, const QString &relativePath, const QString &fileName, qint64 fileBytes, qint64 availableBytes);
+    void slotFileProviderInsufficientQuotaForItem(const QString &domainIdentifier,
+                                                  const QString &relativePath,
+                                                  const QString &fileName,
+                                                  qint64 fileBytes,
+                                                  qint64 availableBytes);
 
     /// Surface a per-folder summary entry for an insufficient-quota event in the activity
     /// view. Carries a "Retry all uploads" button. Connected from
@@ -235,7 +247,7 @@ private:
     bool _isCurrentUser;
     ActivityListModel *_activityModel;
     QVariantMap _accountAlert;
-    
+
     QVariantList _trayFolderInfos;
 
     QTimer _expiredActivitiesCheckTimer;
@@ -284,11 +296,10 @@ private:
 class UserModel : public QAbstractListModel
 {
     Q_OBJECT
-    Q_PROPERTY(User* currentUser READ currentUser NOTIFY currentUserChanged)
+    Q_PROPERTY(User *currentUser READ currentUser NOTIFY currentUserChanged)
     Q_PROPERTY(int currentUserId READ currentUserId WRITE setCurrentUserId NOTIFY currentUserChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
 public:
-
     static UserModel *instance();
     ~UserModel() override = default;
 
@@ -298,7 +309,7 @@ public:
     [[nodiscard]] int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     [[nodiscard]] QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
 
-    [[nodiscard]]  QImage avatarById(const int id) const;
+    [[nodiscard]] QImage avatarById(const int id) const;
     [[nodiscard]] QImage avatarForRow(int row) const;
     [[nodiscard]] QImage syncStatusIconForRow(int row) const;
 
@@ -364,7 +375,7 @@ protected:
 private:
     static UserModel *_instance;
     UserModel(QObject *parent = nullptr);
-    QList<User*> _users;
+    QList<User *> _users;
     int _currentUserId = -1;
     bool _init = true;
     void buildUserList();

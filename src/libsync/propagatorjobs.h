@@ -11,7 +11,8 @@
 #include <QFutureWatcher>
 #include <atomic>
 
-namespace OCC {
+namespace OCC
+{
 
 /**
  * Tags for checksum header.
@@ -28,10 +29,7 @@ constexpr auto checksumRecalculateOnServerHeaderC = "X-Recalculate-Hash";
  */
 [[nodiscard]] inline bool isPathInsideDeletedDir(const QString &path, const QString &deletedDir)
 {
-    return !deletedDir.isEmpty()
-        && path.size() > deletedDir.size()
-        && path[deletedDir.size()] == QLatin1Char('/')
-        && path.startsWith(deletedDir);
+    return !deletedDir.isEmpty() && path.size() > deletedDir.size() && path[deletedDir.size()] == QLatin1Char('/') && path.startsWith(deletedDir);
 }
 
 /**
@@ -138,10 +136,12 @@ class PropagateLocalRename : public PropagateItemJob
 public:
     PropagateLocalRename(OwncloudPropagator *propagator, const SyncFileItemPtr &item);
     void start() override;
-    [[nodiscard]] JobParallelism parallelism() const override { return _item->isDirectory() ? WaitForFinished : FullParallelism; }
+    [[nodiscard]] JobParallelism parallelism() const override
+    {
+        return _item->isDirectory() ? WaitForFinished : FullParallelism;
+    }
 
 private:
     bool deleteOldDbRecord(const QString &fileName);
-
 };
 }

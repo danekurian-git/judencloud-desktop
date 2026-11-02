@@ -6,9 +6,11 @@
 #pragma once
 
 #include "ocsynclib.h"
+
 #include "result.h"
 #include "syncfilestatus.h"
 #include "pinstate.h"
+#include "path.h"
 
 #include "common/remoteinfo.h"
 
@@ -23,7 +25,8 @@
 
 using csync_file_stat_t = struct csync_file_stat_s;
 
-namespace OCC {
+namespace OCC
+{
 
 class Account;
 using AccountPtr = QSharedPointer<Account>;
@@ -31,6 +34,7 @@ class SyncJournalDb;
 class VfsPrivate;
 class SyncFileItem;
 using SyncFileItemPtr = QSharedPointer<SyncFileItem>;
+class HydrationJob;
 
 enum class VirtualItemCreationStatus {
     Unknown,
@@ -47,13 +51,13 @@ struct OCSYNC_EXPORT PlaceholderCreateInfo {
 };
 
 /** Collection of parameters for initializing a Vfs instance. */
-struct OCSYNC_EXPORT VfsSetupParams
-{
+struct OCSYNC_EXPORT VfsSetupParams {
     /** The full path to the folder on the local filesystem
      *
      * Always ends with /.
      */
     QString filesystemPath;
+    FileSystem::Path rootPath;
 
     // Folder display name in Windows Explorer
     QString displayName;
@@ -82,11 +86,14 @@ struct OCSYNC_EXPORT VfsSetupParams
     /// Strings potentially passed on to the platform
     QString providerName;
     QString providerVersion;
+    QString socketPath;
 
     /** when registering with the system we might use
      *  a different presentaton to identify the accounts
      */
     bool multipleAccountsRegistered = false;
+
+    [[nodiscard]] const FileSystem::Path &root() const;
 };
 
 /** Interface describing how to deal with virtual/placeholder files.
@@ -110,18 +117,18 @@ public:
      *
      * Currently plugins and modes are one-to-one but that's not required.
      */
-    enum Mode
-    {
+    enum Mode {
         Off,
         WithSuffix,
         WindowsCfApi,
         XAttr,
+        OpenVFS,
     };
     Q_ENUM(Mode)
     enum class ConvertToPlaceholderResult {
         Error,
         Ok,
-        Locked
+        Locked,
     };
     Q_ENUM(ConvertToPlaceholderResult)
 
@@ -139,8 +146,7 @@ public:
 
     static Result<void, QString> checkAvailability(const QString &path, OCC::Vfs::Mode mode);
 
-    enum class AvailabilityError
-    {
+    enum class AvailabilityError {
         // Availability can't be retrieved due to db error
         DbError,
         // Availability not available since the item doesn't exist
@@ -156,7 +162,7 @@ public:
     Q_ENUM(AvailabilityRecursivity)
 
 public:
-    explicit Vfs(QObject* parent = nullptr);
+    explicit Vfs(QObject *parent = nullptr);
     ~Vfs() override;
 
     [[nodiscard]] virtual Mode mode() const = 0;
@@ -165,8 +171,10 @@ public:
     [[nodiscard]] virtual QString fileSuffix() const = 0;
 
     /// Access to the parameters the instance was start()ed with.
-    [[nodiscard]] const VfsSetupParams &params() const { return _setupParams; }
-
+    [[nodiscard]] const VfsSetupParams &params() const
+    {
+        return _setupParams;
+    }
 
     /** Initializes interaction with the VFS provider.
      *
@@ -198,7 +206,6 @@ public:
     /// Deregister the folder with the sync provider, like when a folder is removed.
     virtual void unregisterFolder() = 0;
 
-
     /** Whether the socket api should show pin state options
      *
      * Some plugins might provide alternate shell integration, making the normal
@@ -217,7 +224,8 @@ public:
      * If the remote metadata changes, the local placeholder's metadata should possibly
      * change as well.
      */
-    [[nodiscard]] virtual OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updateMetadata(const SyncFileItem &syncItem, const QString &filePath, const QString &replacesFile) = 0;
+    [[nodiscard]] virtual OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString>
+    updateMetadata(const SyncFileItem &syncItem, const QString &filePath, const QString &replacesFile) = 0;
 
     [[nodiscard]] virtual Result<Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderMarkInSync(const QString &filePath, const SyncFileItem &item) = 0;
 
@@ -256,10 +264,8 @@ public:
      * new placeholder shall supersede, for rename-replace actions with new downloads,
      * for example.
      */
-    [[nodiscard]] virtual Result<Vfs::ConvertToPlaceholderResult, QString> convertToPlaceholder(const QString &filename,
-                                                                                                    const SyncFileItem &item,
-                                                                                                    const QString &replacesFile = {},
-                                                                                                    UpdateMetadataTypes updateType = AllMetadata) = 0;
+    [[nodiscard]] virtual Result<Vfs::ConvertToPlaceholderResult, QString>
+    convertToPlaceholder(const QString &filename, const SyncFileItem &item, const QString &replacesFile = {}, UpdateMetadataTypes updateType = AllMetadata) = 0;
 
     /// Determine whether the file at the given absolute path is a dehydrated placeholder.
     [[nodiscard]] virtual bool isDehydratedPlaceholder(const QString &filePath) = 0;
@@ -304,6 +310,15 @@ public:
      */
     [[nodiscard]] virtual AvailabilityResult availability(const QString &folderPath, const AvailabilityRecursivity recursiveCheck) = 0;
 
+    /** Start a hydration (download of remote contents) of a file.
+     *
+     * The fileId is the SyncFileItem::id() value of the file to hydrate.
+     * The targetPath is the absolute path to the local file to hydrate.
+     *
+     * Returns a QFuture<Result> void if successful and QFuture<Result> QString if an error occurs.
+     */
+    [[nodiscard]] virtual HydrationJob *hydrateFile(const QByteArray &fileId, const QString &targetPath) = 0;
+
 public Q_SLOTS:
     /** Update in-sync state based on SyncFileStatusTracker signal.
      *
@@ -320,6 +335,15 @@ Q_SIGNALS:
     void doneHydrating();
     // Emitted when hydration fails
     void failureHydrating(int errorCode, int statusCode, const QString &errorString, const QString &fileName);
+
+    /// we encountered an error
+    void error(const QString &error);
+
+    /// start complete
+    void started();
+
+    /// The vfs plugin detected that the meta data are out of sync and requests a sync with the server
+    void needSync();
 
 protected:
     /** Setup the plugin for the folder.
@@ -348,42 +372,106 @@ class OCSYNC_EXPORT VfsOff : public Vfs
     Q_OBJECT
 
 public:
-    VfsOff(QObject* parent = nullptr);
+    VfsOff(QObject *parent = nullptr);
     ~VfsOff() override;
 
-    [[nodiscard]] Mode mode() const override { return Vfs::Off; }
+    [[nodiscard]] Mode mode() const override
+    {
+        return Vfs::Off;
+    }
 
-    [[nodiscard]] QString fileSuffix() const override { return QString(); }
+    [[nodiscard]] QString fileSuffix() const override
+    {
+        return QString();
+    }
 
-    void stop() override {}
-    void unregisterFolder() override {}
+    void stop() override
+    {
+    }
+    void unregisterFolder() override
+    {
+    }
 
-    [[nodiscard]] bool socketApiPinStateActionsShown() const override { return false; }
-    [[nodiscard]] bool isHydrating() const override { return false; }
+    [[nodiscard]] bool socketApiPinStateActionsShown() const override
+    {
+        return false;
+    }
+    [[nodiscard]] bool isHydrating() const override
+    {
+        return false;
+    }
 
-    OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updateMetadata(const SyncFileItem &, const QString &, const QString &) override { return {OCC::Vfs::ConvertToPlaceholderResult::Ok}; }
-    Result<Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderMarkInSync(const QString &filePath, const SyncFileItem &item) override {Q_UNUSED(filePath) Q_UNUSED(item) return {QString{}};}
-    [[nodiscard]] bool isPlaceHolderInSync(const QString &filePath) const override { Q_UNUSED(filePath) return true; }
+    OCC::Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updateMetadata(const SyncFileItem &, const QString &, const QString &) override
+    {
+        return {OCC::Vfs::ConvertToPlaceholderResult::Ok};
+    }
+    Result<Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderMarkInSync(const QString &filePath, const SyncFileItem &item) override
+    {
+        Q_UNUSED(filePath)
+        Q_UNUSED(item)
+        return {QString{}};
+    }
+    [[nodiscard]] bool isPlaceHolderInSync(const QString &filePath) const override
+    {
+        Q_UNUSED(filePath)
+        return true;
+    }
 
-    Result<void, QString> createPlaceholder(const SyncFileItem &) override { return {}; }
-    Result<void, QString> createPlaceholders(const QList<SyncFileItemPtr> &) override { return {}; }
+    Result<void, QString> createPlaceholder(const SyncFileItem &) override
+    {
+        return {};
+    }
+    Result<void, QString> createPlaceholders(const QList<SyncFileItemPtr> &) override
+    {
+        return {};
+    }
 
-    Result<void, QString> dehydratePlaceholder(const SyncFileItem &) override { return {}; }
-    Result<ConvertToPlaceholderResult, QString> convertToPlaceholder(const QString &, const SyncFileItem &, const QString &, const UpdateMetadataTypes) override { return ConvertToPlaceholderResult::Ok; }
+    Result<void, QString> dehydratePlaceholder(const SyncFileItem &) override
+    {
+        return {};
+    }
+    Result<ConvertToPlaceholderResult, QString> convertToPlaceholder(const QString &, const SyncFileItem &, const QString &, const UpdateMetadataTypes) override
+    {
+        return ConvertToPlaceholderResult::Ok;
+    }
 
-    bool needsMetadataUpdate(const SyncFileItem &) override { return false; }
-    bool isDehydratedPlaceholder(const QString &) override { return false; }
-    bool statTypeVirtualFile(csync_file_stat_t *, void *) override { return false; }
+    bool needsMetadataUpdate(const SyncFileItem &) override
+    {
+        return false;
+    }
+    bool isDehydratedPlaceholder(const QString &) override
+    {
+        return false;
+    }
+    bool statTypeVirtualFile(csync_file_stat_t *, void *) override
+    {
+        return false;
+    }
 
-    bool setPinState(const QString &, PinState) override { return true; }
-    Optional<PinState> pinState(const QString &) override { return PinState::AlwaysLocal; }
-    AvailabilityResult availability(const QString &, const AvailabilityRecursivity) override { return VfsItemAvailability::AlwaysLocal; }
+    bool setPinState(const QString &, PinState) override
+    {
+        return true;
+    }
+    Optional<PinState> pinState(const QString &) override
+    {
+        return PinState::AlwaysLocal;
+    }
+    AvailabilityResult availability(const QString &, const AvailabilityRecursivity) override
+    {
+        return VfsItemAvailability::AlwaysLocal;
+    }
+
+    [[nodiscard]] HydrationJob *hydrateFile(const QByteArray &fileId, const QString &targetPath) override;
 
 public Q_SLOTS:
-    void fileStatusChanged(const QString &, OCC::SyncFileStatus) override {}
+    void fileStatusChanged(const QString &, OCC::SyncFileStatus) override
+    {
+    }
 
 protected:
-    void startImpl(const VfsSetupParams &) override {}
+    void startImpl(const VfsSetupParams &) override
+    {
+    }
 };
 
 /// Check whether the plugin for the mode is available.
@@ -397,12 +485,15 @@ OCSYNC_EXPORT std::unique_ptr<Vfs> createVfsFromPlugin(Vfs::Mode mode);
 
 } // namespace OCC
 
-#define OCC_DEFINE_VFS_FACTORY(name, Type) \
-    static_assert (std::is_base_of<OCC::Vfs, Type>::value, "Please define VFS factories only for OCC::Vfs subclasses"); \
-    namespace { \
-    void initPlugin() \
-    { \
-        OCC::Vfs::registerPlugin(QStringLiteral(name), []() -> OCC::Vfs * { return new (Type); }); \
-    } \
-    Q_COREAPP_STARTUP_FUNCTION(initPlugin) \
+#define OCC_DEFINE_VFS_FACTORY(name, Type)                                                                                                                     \
+    static_assert(std::is_base_of<OCC::Vfs, Type>::value, "Please define VFS factories only for OCC::Vfs subclasses");                                         \
+    namespace                                                                                                                                                  \
+    {                                                                                                                                                          \
+    void initPlugin()                                                                                                                                          \
+    {                                                                                                                                                          \
+        OCC::Vfs::registerPlugin(QStringLiteral(name), []() -> OCC::Vfs * {                                                                                    \
+            return new (Type);                                                                                                                                 \
+        });                                                                                                                                                    \
+    }                                                                                                                                                          \
+    Q_COREAPP_STARTUP_FUNCTION(initPlugin)                                                                                                                     \
     }

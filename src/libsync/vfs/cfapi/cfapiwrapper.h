@@ -21,7 +21,8 @@
 
 struct CF_PLACEHOLDER_BASIC_INFO;
 
-namespace OCC {
+namespace OCC
+{
 
 class VfsCfApi;
 
@@ -32,10 +33,13 @@ class NEXTCLOUD_CFAPI_EXPORT ConnectionKey
 {
 public:
     ConnectionKey();
-    inline void *get() const { return _data.get(); }
+    inline void *get() const
+    {
+        return _data.get();
+    }
 
 private:
-    std::unique_ptr<void, void(*)(void *)> _data;
+    std::unique_ptr<void, void (*)(void *)> _data;
 };
 
 class NEXTCLOUD_CFAPI_EXPORT FileHandle
@@ -46,11 +50,17 @@ public:
     FileHandle();
     FileHandle(void *data, Deleter deleter);
 
-    inline void *get() const { return _data.get(); }
-    inline explicit operator bool() const noexcept { return static_cast<bool>(_data); }
+    inline void *get() const
+    {
+        return _data.get();
+    }
+    inline explicit operator bool() const noexcept
+    {
+        return static_cast<bool>(_data);
+    }
 
 private:
-    std::unique_ptr<void, void(*)(void *)> _data;
+    std::unique_ptr<void, void (*)(void *)> _data;
 };
 
 class NEXTCLOUD_CFAPI_EXPORT PlaceHolderInfo
@@ -58,11 +68,23 @@ class NEXTCLOUD_CFAPI_EXPORT PlaceHolderInfo
 public:
     PlaceHolderInfo(std::vector<char> &&buffer = {});
 
-    inline auto *get() const noexcept { return reinterpret_cast<CF_PLACEHOLDER_BASIC_INFO *>(const_cast<char *>(_data.data())); }
-    inline auto *operator->() const noexcept { return get(); }
-    inline explicit operator bool() const noexcept { return !_data.empty(); }
+    inline auto *get() const noexcept
+    {
+        return reinterpret_cast<CF_PLACEHOLDER_BASIC_INFO *>(const_cast<char *>(_data.data()));
+    }
+    inline auto *operator->() const noexcept
+    {
+        return get();
+    }
+    inline explicit operator bool() const noexcept
+    {
+        return !_data.empty();
+    }
 
-    inline auto size() const { return _data.size(); }
+    inline auto size() const
+    {
+        return _data.size();
+    }
 
     Optional<PinState> pinState() const;
 
@@ -70,7 +92,13 @@ private:
     std::vector<char> _data;
 };
 
-NEXTCLOUD_CFAPI_EXPORT Result<void, QString> registerSyncRoot(const QString &path, const QString &providerName, const QString &providerVersion, const QString &folderAlias, const QString &navigationPaneClsid, const QString &displayName, const QString &accountDisplayName);
+NEXTCLOUD_CFAPI_EXPORT Result<void, QString> registerSyncRoot(const QString &path,
+                                                              const QString &providerName,
+                                                              const QString &providerVersion,
+                                                              const QString &folderAlias,
+                                                              const QString &navigationPaneClsid,
+                                                              const QString &displayName,
+                                                              const QString &accountDisplayName);
 NEXTCLOUD_CFAPI_EXPORT void unregisterSyncRootShellExtensions(const QString &providerName, const QString &folderAlias, const QString &accountDisplayName);
 NEXTCLOUD_CFAPI_EXPORT Result<void, QString> unregisterSyncRoot(const QString &path, const QString &providerName, const QString &accountDisplayName);
 
@@ -87,7 +115,7 @@ NEXTCLOUD_CFAPI_EXPORT PlaceHolderInfo findPlaceholderInfo(const QString &path);
 enum SetPinRecurseMode {
     NoRecurse = 0,
     Recurse,
-    ChildrenOnly
+    ChildrenOnly,
 };
 
 NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString> setPinState(const QString &path, PinState state, SetPinRecurseMode mode);
@@ -106,10 +134,14 @@ struct PlaceholdersInfo {
 NEXTCLOUD_CFAPI_EXPORT CF_PLACEHOLDER_CREATE_INFO createTransferPlaceholderInfo(const PlaceholderCreateInfo &entryInfo);
 
 NEXTCLOUD_CFAPI_EXPORT Result<void, QString> createPlaceholdersInfo(const QString &localBasePath, const QList<PlaceholdersInfo> &itemsInfo);
-NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderInfo(const QString &path, const SyncFileItem &item, const QString &replacesPath = QString());
-NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString> convertToPlaceholder(const QString &path, const SyncFileItem &item, const QString &replacesPath);
-NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString> dehydratePlaceholder(const QString &path, time_t modtime, qint64 size, const QByteArray &fileId);
-NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderMarkInSync(const QString &path, const SyncFileItem &item, const QString &replacesPath = QString());
+NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString>
+updatePlaceholderInfo(const QString &path, const SyncFileItem &item, const QString &replacesPath = QString());
+NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString>
+convertToPlaceholder(const QString &path, const SyncFileItem &item, const QString &replacesPath);
+NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString>
+dehydratePlaceholder(const QString &path, time_t modtime, qint64 size, const QByteArray &fileId);
+NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString>
+updatePlaceholderMarkInSync(const QString &path, const SyncFileItem &item, const QString &replacesPath = QString());
 NEXTCLOUD_CFAPI_EXPORT bool isPlaceHolderInSync(const QString &filePath);
 
 }

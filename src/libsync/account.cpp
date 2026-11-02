@@ -55,8 +55,10 @@
 #include "creds/abstractcredentials.h"
 
 using namespace QKeychain;
+using namespace Qt::StringLiterals;
 
-namespace {
+namespace
+{
 constexpr int pushNotificationsReconnectInterval = 1000 * 60 * 2;
 constexpr int usernamePrefillServerVersionMinSupportedMajor = 24;
 constexpr int checksumRecalculateRequestServerVersionMinSupportedMajor = 24;
@@ -74,7 +76,8 @@ bool isPushNotificationsWebSocketUrlAllowed(const QUrl &accountUrl, const QUrl &
 }
 }
 
-namespace OCC {
+namespace OCC
+{
 Q_LOGGING_CATEGORY(lcAccount, "nextcloud.sync.account", QtInfoMsg)
 const char app_password[] = "_app-password";
 
@@ -83,6 +86,7 @@ Account::Account(QObject *parent)
     , _capabilities(QVariantMap())
     , _serverColor(Theme::defaultColor())
     , _e2e{}
+    , _uuid{QUuid::createUuid()}
 {
     qRegisterMetaType<AccountPtr>("AccountPtr");
     qRegisterMetaType<Account *>("Account*");
@@ -90,8 +94,7 @@ Account::Account(QObject *parent)
     _pushNotificationsReconnectTimer.setInterval(pushNotificationsReconnectInterval);
     connect(&_pushNotificationsReconnectTimer, &QTimer::timeout, this, &Account::trySetupPushNotifications);
 
-    connect(&_e2e, &ClientSideEncryption::userCertificateNeedsMigrationChanged,
-            this, &Account::userCertificateNeedsMigrationChanged);
+    connect(&_e2e, &ClientSideEncryption::userCertificateNeedsMigrationChanged, this, &Account::userCertificateNeedsMigrationChanged);
 }
 
 AccountPtr Account::create()
@@ -102,7 +105,7 @@ AccountPtr Account::create()
     return acc;
 }
 
-ClientSideEncryption* Account::e2e()
+ClientSideEncryption *Account::e2e()
 {
     // Qt expects everything in the connect to be a pointer, so return a pointer.
     return &_e2e;
@@ -312,22 +315,22 @@ void Account::setCredentials(AbstractCredentials *cred)
         _networkAccessManager->setCookieJar(jar);
     }
     if (proxy.type() != QNetworkProxy::DefaultProxy) {
-        _networkAccessManager->setProxy(proxy);
+        _networkAccessManager->setProxy(proxy); // Remember proxy (issue #2108)
+    } else if (_managedProxy.isManaged) {
+        applyProxyToNetworkAccessManager();
     }
     PrivateCloudTransport::apply(_networkAccessManager.data());
-    connect(_networkAccessManager.data(), &QNetworkAccessManager::sslErrors,
-        this, &Account::slotHandleSslErrors);
-    connect(_networkAccessManager.data(), &QNetworkAccessManager::proxyAuthenticationRequired,
-        this,
+    connect(_networkAccessManager.data(), &QNetworkAccessManager::sslErrors, this, &Account::slotHandleSslErrors);
+    connect(_networkAccessManager.data(),
+            &QNetworkAccessManager::proxyAuthenticationRequired,
+            this,
             [this](const QNetworkProxy &proxy, QAuthenticator *authenticator) {
                 if (!PrivateCloudTransport::isRequired()) {
                     Q_EMIT proxyAuthenticationRequired(proxy, authenticator);
                 }
             });
-    connect(_credentials.data(), &AbstractCredentials::fetched,
-        this, &Account::slotCredentialsFetched);
-    connect(_credentials.data(), &AbstractCredentials::asked,
-        this, &Account::slotCredentialsAsked);
+    connect(_credentials.data(), &AbstractCredentials::fetched, this, &Account::slotCredentialsFetched);
+    connect(_credentials.data(), &AbstractCredentials::asked, this, &Account::slotCredentialsAsked);
 
     trySetupPushNotifications();
 }
@@ -409,10 +412,24 @@ QUrl Account::davUrl() const
     return Utility::concatUrlPath(url(), davPath());
 }
 
-QUrl Account::deprecatedPrivateLinkUrl(const QByteArray &numericFileId) const
+QUrl Account::internalLinkUrl(const QByteArray &numericFileId) const
 {
-    return Utility::concatUrlPath(_userVisibleUrl,
-        QLatin1String("/index.php/f/") + QUrl::toPercentEncoding(QString::fromLatin1(numericFileId)));
+    if (numericFileId.isEmpty()) {
+        return {};
+    }
+
+    const auto token = _capabilities.globalScaleToken();
+    const auto path = token.isEmpty() ? u"/index.php/f/"_s : u"/index.php/gf/"_s + QString::fromLatin1(QUrl::toPercentEncoding(token)) + u'/';
+    auto link = _userVisibleUrl;
+    auto basePath = link.path(QUrl::FullyEncoded);
+    if (basePath.endsWith(u'/')) {
+        basePath.chop(1);
+    }
+    // Keep escaped separators inside the token and file ID as path-component data.
+    link.setPath(basePath + path + QString::fromLatin1(QUrl::toPercentEncoding(QString::fromUtf8(numericFileId))), QUrl::TolerantMode);
+    link.setQuery(QString{});
+    link.setFragment(QString{});
+    return link;
 }
 
 /**
@@ -456,13 +473,13 @@ void Account::resetNetworkAccessManager()
     _networkAccessManager = QSharedPointer<QNetworkAccessManager>(_credentials->createQNAM(), &QObject::deleteLater);
 
     _networkAccessManager->setCookieJar(jar); // takes ownership of the old cookie jar
-    _networkAccessManager->setProxy(proxy);   // Remember proxy (issue #2108)
+    _networkAccessManager->setProxy(proxy); // Remember proxy (issue #2108)
 
     PrivateCloudTransport::apply(_networkAccessManager.data());
-    connect(_networkAccessManager.data(), &QNetworkAccessManager::sslErrors,
-        this, &Account::slotHandleSslErrors);
-    connect(_networkAccessManager.data(), &QNetworkAccessManager::proxyAuthenticationRequired,
-        this,
+    connect(_networkAccessManager.data(), &QNetworkAccessManager::sslErrors, this, &Account::slotHandleSslErrors);
+    connect(_networkAccessManager.data(),
+            &QNetworkAccessManager::proxyAuthenticationRequired,
+            this,
             [this](const QNetworkProxy &proxy, QAuthenticator *authenticator) {
                 if (!PrivateCloudTransport::isRequired()) {
                     Q_EMIT proxyAuthenticationRequired(proxy, authenticator);
@@ -480,10 +497,7 @@ QSharedPointer<QNetworkAccessManager> Account::sharedNetworkAccessManager() cons
     return _networkAccessManager;
 }
 
-QNetworkReply *Account::sendRawRequest(const QByteArray &verb,
-                                       const QUrl &url,
-                                       QNetworkRequest req,
-                                       QIODevice *data)
+QNetworkReply *Account::sendRawRequest(const QByteArray &verb, const QUrl &url, QNetworkRequest req, QIODevice *data)
 {
     req.setUrl(url);
     req.setSslConfiguration(this->getOrCreateSslConfig());
@@ -501,10 +515,7 @@ QNetworkReply *Account::sendRawRequest(const QByteArray &verb,
     return _networkAccessManager->sendCustomRequest(req, verb, data);
 }
 
-QNetworkReply *Account::sendRawRequest(const QByteArray &verb,
-                                       const QUrl &url,
-                                       QNetworkRequest req,
-                                       const QByteArray &data)
+QNetworkReply *Account::sendRawRequest(const QByteArray &verb, const QUrl &url, QNetworkRequest req, const QByteArray &data)
 {
     req.setUrl(url);
     req.setSslConfiguration(this->getOrCreateSslConfig());
@@ -522,10 +533,7 @@ QNetworkReply *Account::sendRawRequest(const QByteArray &verb,
     return _networkAccessManager->sendCustomRequest(req, verb, data);
 }
 
-QNetworkReply *Account::sendRawRequest(const QByteArray &verb,
-                                       const QUrl &url,
-                                       QNetworkRequest req,
-                                       QHttpMultiPart *data)
+QNetworkReply *Account::sendRawRequest(const QByteArray &verb, const QUrl &url, QNetworkRequest req, QHttpMultiPart *data)
 {
     req.setUrl(url);
     req.setSslConfiguration(this->getOrCreateSslConfig());
@@ -685,12 +693,10 @@ void Account::setCredentialSetting(const QString &key, const QVariant &value)
 
 void Account::slotHandleSslErrors(QNetworkReply *reply, QList<QSslError> errors)
 {
-    NetworkJobTimeoutPauser pauser(reply);
     QString out;
     QDebug(&out) << "SSL-Errors happened for url " << reply->url().toString();
     for (const auto &error : errors) {
-        QDebug(&out) << "\tError in " << error.certificate() << ":"
-                     << error.errorString() << "(" << error.error() << ")"
+        QDebug(&out) << "\tError in " << error.certificate() << ":" << error.errorString() << "(" << error.error() << ")"
                      << "\n";
     }
 
@@ -825,6 +831,7 @@ void Account::setCapabilities(const QVariantMap &caps)
     updateServerColors();
     updateServerSubcription();
     updateDesktopEnterpriseChannel();
+    updateServerManagedSettings();
     updateServerHasIntegration();
 
     Q_EMIT capabilitiesChanged();
@@ -869,9 +876,7 @@ int Account::serverVersionInt() const
 {
     // FIXME: Use Qt 5.5 QVersionNumber
     const auto components = serverVersion().split('.');
-    return makeServerVersion(components.value(0).toInt(),
-        components.value(1).toInt(),
-        components.value(2).toInt());
+    return makeServerVersion(components.value(0).toInt(), components.value(1).toInt(), components.value(2).toInt());
 }
 
 bool Account::serverHasMountRootProperty() const
@@ -892,7 +897,8 @@ bool Account::serverVersionUnsupported() const
         return false;
     }
     return serverVersionInt() < makeServerVersion(NEXTCLOUD_SERVER_VERSION_MIN_SUPPORTED_MAJOR,
-               NEXTCLOUD_SERVER_VERSION_MIN_SUPPORTED_MINOR, NEXTCLOUD_SERVER_VERSION_MIN_SUPPORTED_PATCH);
+                                                  NEXTCLOUD_SERVER_VERSION_MIN_SUPPORTED_MINOR,
+                                                  NEXTCLOUD_SERVER_VERSION_MIN_SUPPORTED_PATCH);
 }
 
 bool Account::secureFileDropSupported() const
@@ -979,10 +985,10 @@ void Account::runAppPasswordJob(AppPasswordOperation operation, const QString &k
     job->setKey(key);
     connect(job, &Job::finished, this, [operation, callback = std::move(callback)](Job *finishedJob) {
         const auto error = finishedJob->error();
-        const auto result = error == NoError ? AppPasswordResult::Success
-            : error == EntryNotFound ? AppPasswordResult::Missing : AppPasswordResult::Error;
+        const auto result = error == NoError ? AppPasswordResult::Success : error == EntryNotFound ? AppPasswordResult::Missing : AppPasswordResult::Error;
         const auto value = operation == AppPasswordOperation::Read && result == AppPasswordResult::Success
-            ? static_cast<ReadPasswordJob *>(finishedJob)->binaryData() : QByteArray{};
+            ? static_cast<ReadPasswordJob *>(finishedJob)->binaryData()
+            : QByteArray{};
         callback(result, value);
     });
     job->start();
@@ -1062,8 +1068,7 @@ void Account::fetchDirectEditors(const QUrl &directEditingURL, const QString &di
     }
 
     // Check for the directEditing capability
-    if (!directEditingURL.isEmpty() &&
-        (directEditingETag.isEmpty() || directEditingETag != _lastDirectEditingETag)) {
+    if (!directEditingURL.isEmpty() && (directEditingETag.isEmpty() || directEditingETag != _lastDirectEditingETag)) {
         // Fetch the available editors and their mime types
         auto job = new JsonApiJob(sharedFromThis(), QLatin1String("ocs/v2.php/apps/files/api/v1/directEditing"));
         QObject::connect(job, &JsonApiJob::jsonReceived, this, &Account::slotDirectEditingRecieved);
@@ -1083,7 +1088,7 @@ void Account::slotDirectEditingRecieved(const QJsonDocument &json)
         const QString id = editor.value("id").toString();
         const QString name = editor.value("name").toString();
 
-        if(!id.isEmpty() && !name.isEmpty()) {
+        if (!id.isEmpty() && !name.isEmpty()) {
             auto mimeTypes = editor.value("mimetypes").toArray();
             auto optionalMimeTypes = editor.value("optionalMimetypes").toArray();
 
@@ -1127,7 +1132,7 @@ void Account::setLockFileState(const QString &serverRelativePath,
                                const QString &remoteSyncPathWithTrailingSlash,
                                const QString &localSyncPath,
                                const QString &etag,
-                               SyncJournalDb * const journal,
+                               SyncJournalDb *const journal,
                                const SyncFileItem::LockStatus lockStatus,
                                const SyncFileItem::LockOwnerType lockOwnerType)
 {
@@ -1137,31 +1142,40 @@ void Account::setLockFileState(const QString &serverRelativePath,
         return;
     }
     lockStatusJobInProgress.push_back(lockStatus);
-    auto job = std::make_unique<LockFileJob>(sharedFromThis(), journal, serverRelativePath, remoteSyncPathWithTrailingSlash, localSyncPath, etag, lockStatus, lockOwnerType);
+    auto job = std::make_unique<LockFileJob>(sharedFromThis(),
+                                             journal,
+                                             serverRelativePath,
+                                             remoteSyncPathWithTrailingSlash,
+                                             localSyncPath,
+                                             etag,
+                                             lockStatus,
+                                             lockOwnerType);
     connect(job.get(), &LockFileJob::finishedWithoutError, this, [this, serverRelativePath, lockStatus]() {
         removeLockStatusChangeInprogress(serverRelativePath, lockStatus);
         Q_EMIT lockFileSuccess();
     });
-    connect(job.get(), &LockFileJob::finishedWithError, this, [lockStatus, serverRelativePath, this](const int httpErrorCode, const QString &errorString, const QString &lockOwnerName) {
-        removeLockStatusChangeInprogress(serverRelativePath, lockStatus);
-        auto errorMessage = QString{};
-        const auto filePath = serverRelativePath.mid(1);
+    connect(job.get(),
+            &LockFileJob::finishedWithError,
+            this,
+            [lockStatus, serverRelativePath, this](const int httpErrorCode, const QString &errorString, const QString &lockOwnerName) {
+                removeLockStatusChangeInprogress(serverRelativePath, lockStatus);
+                auto errorMessage = QString{};
+                const auto filePath = serverRelativePath.mid(1);
 
-        if (httpErrorCode == LockFileJob::LOCKED_HTTP_ERROR_CODE) {
-            errorMessage = tr("File %1 is already locked by %2.").arg(filePath, lockOwnerName);
-        } else if (lockStatus == SyncFileItem::LockStatus::LockedItem) {
-             errorMessage = tr("Lock operation on %1 failed with error %2").arg(filePath, errorString);
-        } else if (lockStatus == SyncFileItem::LockStatus::UnlockedItem) {
-             errorMessage = tr("Unlock operation on %1 failed with error %2").arg(filePath, errorString);
-        }
-        Q_EMIT lockFileError(errorMessage);
-    });
+                if (httpErrorCode == LockFileJob::LOCKED_HTTP_ERROR_CODE) {
+                    errorMessage = tr("File %1 is already locked by %2.").arg(filePath, lockOwnerName);
+                } else if (lockStatus == SyncFileItem::LockStatus::LockedItem) {
+                    errorMessage = tr("Lock operation on %1 failed with error %2").arg(filePath, errorString);
+                } else if (lockStatus == SyncFileItem::LockStatus::UnlockedItem) {
+                    errorMessage = tr("Unlock operation on %1 failed with error %2").arg(filePath, errorString);
+                }
+                Q_EMIT lockFileError(errorMessage);
+            });
     job->start();
     static_cast<void>(job.release());
 }
 
-SyncFileItem::LockStatus Account::fileLockStatus(SyncJournalDb * const journal,
-                                                 const QString &folderRelativePath) const
+SyncFileItem::LockStatus Account::fileLockStatus(SyncJournalDb *const journal, const QString &folderRelativePath) const
 {
     SyncJournalFileRecord record;
     if (journal->getFileRecord(folderRelativePath, &record)) {
@@ -1171,8 +1185,7 @@ SyncFileItem::LockStatus Account::fileLockStatus(SyncJournalDb * const journal,
     return SyncFileItem::LockStatus::UnlockedItem;
 }
 
-bool Account::fileCanBeUnlocked(SyncJournalDb * const journal,
-                                const QString &folderRelativePath) const
+bool Account::fileCanBeUnlocked(SyncJournalDb *const journal, const QString &folderRelativePath) const
 {
     SyncJournalFileRecord record;
     if (journal->getFileRecord(folderRelativePath, &record)) {
@@ -1181,14 +1194,13 @@ bool Account::fileCanBeUnlocked(SyncJournalDb * const journal,
             return false;
         }
 
-        if (record._lockstate._lockOwnerType == static_cast<int>(SyncFileItem::LockOwnerType::UserLock) &&
-            record._lockstate._lockOwnerId != sharedFromThis()->davUser()) {
+        if (record._lockstate._lockOwnerType == static_cast<int>(SyncFileItem::LockOwnerType::UserLock)
+            && record._lockstate._lockOwnerId != sharedFromThis()->davUser()) {
             qCWarning(lcAccount()) << folderRelativePath << "cannot be unlocked: user lock from" << record._lockstate._lockOwnerId;
             return false;
         }
 
-        if (record._lockstate._lockOwnerType == static_cast<int>(SyncFileItem::LockOwnerType::TokenLock) &&
-            record._lockstate._lockToken.isEmpty()) {
+        if (record._lockstate._lockOwnerType == static_cast<int>(SyncFileItem::LockOwnerType::TokenLock) && record._lockstate._lockToken.isEmpty()) {
             qCWarning(lcAccount()) << folderRelativePath << "cannot be unlocked: token lock without known token";
             return false;
         }
@@ -1311,7 +1323,7 @@ void Account::listRemoteFolder(QPromise<OCC::PlaceholderCreateInfo> *promise,
 
     listFolderJob->setProperties(props);
 
-    QObject::connect(listFolderJob, &OCC::LsColJob::networkError, this, [promise, subPath] (QNetworkReply *reply) {
+    QObject::connect(listFolderJob, &OCC::LsColJob::networkError, this, [promise, subPath](QNetworkReply *reply) {
         if (reply) {
             qCWarning(lcAccount()) << "ls col job" << subPath << "error" << reply->errorString();
         }
@@ -1320,7 +1332,7 @@ void Account::listRemoteFolder(QPromise<OCC::PlaceholderCreateInfo> *promise,
         promise->finish();
     });
 
-    QObject::connect(listFolderJob, &OCC::LsColJob::finishedWithError, this, [promise, subPath] (QNetworkReply *reply) {
+    QObject::connect(listFolderJob, &OCC::LsColJob::finishedWithError, this, [promise, subPath](QNetworkReply *reply) {
         if (reply) {
             qCWarning(lcAccount()) << "ls col job" << subPath << "error" << reply->errorString();
         }
@@ -1329,7 +1341,7 @@ void Account::listRemoteFolder(QPromise<OCC::PlaceholderCreateInfo> *promise,
         promise->finish();
     });
 
-    QObject::connect(listFolderJob, &OCC::LsColJob::finishedWithoutError, this, [promise, subPath] () {
+    QObject::connect(listFolderJob, &OCC::LsColJob::finishedWithoutError, this, [promise, subPath]() {
         qCInfo(lcAccount()) << "ls col job" << subPath << "finished";
         promise->finish();
     });
@@ -1341,49 +1353,55 @@ void Account::listRemoteFolder(QPromise<OCC::PlaceholderCreateInfo> *promise,
         syncRootPath = syncRootPath.mid(baseRemotePath.size());
     }
 
-    QObject::connect(listFolderJob, &OCC::LsColJob::directoryListingIterated, this, [promise, remoteSyncRootPath, syncRootPath, journalForFolder, this](const QString &completeDavPath, const QMap<QString, QString> &properties) {
-        if (!sender()->property("ignoredFirst").toBool()) {
-            qCDebug(lcAccount()) << "skip first item";
-            sender()->setProperty("ignoredFirst", true);
-            sender()->setProperty("externalStorageBlocked", RemotePermissions::isExternalStorageType(properties.value(QStringLiteral("mount-type"))));
-            return;
-        }
+    QObject::connect(
+        listFolderJob,
+        &OCC::LsColJob::directoryListingIterated,
+        this,
+        [promise, remoteSyncRootPath, syncRootPath, journalForFolder, this](const QString &completeDavPath, const QMap<QString, QString> &properties) {
+            if (!sender()->property("ignoredFirst").toBool()) {
+                qCDebug(lcAccount()) << "skip first item";
+                sender()->setProperty("ignoredFirst", true);
+                sender()->setProperty("externalStorageBlocked", RemotePermissions::isExternalStorageType(properties.value(QStringLiteral("mount-type"))));
+                return;
+            }
 
-        if (sender()->property("externalStorageBlocked").toBool() || RemotePermissions::isExternalStorageType(properties.value(QStringLiteral("mount-type")))) {
-            qCInfo(lcAccount()) << "Skipping external storage placeholder" << completeDavPath;
-            return;
-        }
+            if (sender()->property("externalStorageBlocked").toBool()
+                || RemotePermissions::isExternalStorageType(properties.value(QStringLiteral("mount-type")))) {
+                qCInfo(lcAccount()) << "Skipping external storage placeholder" << completeDavPath;
+                return;
+            }
 
-        qCInfo(lcAccount()) << "ls col job" << syncRootPath << "new file" << completeDavPath << properties.count();
+            qCInfo(lcAccount()) << "ls col job" << syncRootPath << "new file" << completeDavPath << properties.count();
 
-        const auto slash = completeDavPath.lastIndexOf('/');
-        const auto itemFileName = completeDavPath.mid(slash + 1);
-        const auto absoluteItemPathName = syncRootPath.isEmpty() ? itemFileName : Utility::noTrailingSlashPath(syncRootPath) + '/' + itemFileName;
+            const auto slash = completeDavPath.lastIndexOf('/');
+            const auto itemFileName = completeDavPath.mid(slash + 1);
+            const auto absoluteItemPathName = syncRootPath.isEmpty() ? itemFileName : Utility::noTrailingSlashPath(syncRootPath) + '/' + itemFileName;
 
-        auto currentItemDbRecord = SyncJournalFileRecord{};
-        if (journalForFolder->getFileRecord(absoluteItemPathName, &currentItemDbRecord) && currentItemDbRecord.isValid()) {
-            qCWarning(lcAccount()) << "skip existing item" << absoluteItemPathName;
-            return;
-        }
+            auto currentItemDbRecord = SyncJournalFileRecord{};
+            if (journalForFolder->getFileRecord(absoluteItemPathName, &currentItemDbRecord) && currentItemDbRecord.isValid()) {
+                qCWarning(lcAccount()) << "skip existing item" << absoluteItemPathName;
+                return;
+            }
 
-        auto newEntry = RemoteInfo{};
-        newEntry.name = itemFileName;
-        newEntry.size = -1;
+            auto newEntry = RemoteInfo{};
+            newEntry.name = itemFileName;
+            newEntry.size = -1;
 
-        LsColJob::propertyMapToRemoteInfo(properties,
-                                          serverHasMountRootProperty() ? RemotePermissions::MountedPermissionAlgorithm::UseMountRootProperty : RemotePermissions::MountedPermissionAlgorithm::WildGuessMountedSubProperty,
-                                          newEntry);
-        if (newEntry.isDirectory) {
-            newEntry.size = 0;
-        }
+            LsColJob::propertyMapToRemoteInfo(properties,
+                                              serverHasMountRootProperty() ? RemotePermissions::MountedPermissionAlgorithm::UseMountRootProperty
+                                                                           : RemotePermissions::MountedPermissionAlgorithm::WildGuessMountedSubProperty,
+                                              newEntry);
+            if (newEntry.isDirectory) {
+                newEntry.size = 0;
+            }
 
-        if (!newEntry.remotePerm.isNull() && !newEntry.remotePerm.hasPermission(RemotePermissions::CanRead)) {
-            qCWarning(lcAccount()) << "skip non-readable item" << absoluteItemPathName;
-            return;
-        }
+            if (!newEntry.remotePerm.isNull() && !newEntry.remotePerm.hasPermission(RemotePermissions::CanRead)) {
+                qCWarning(lcAccount()) << "skip non-readable item" << absoluteItemPathName;
+                return;
+            }
 
-        promise->emplaceResult(itemFileName, itemFileName.toStdWString(), absoluteItemPathName, newEntry);
-    });
+            promise->emplaceResult(itemFileName, itemFileName.toStdWString(), absoluteItemPathName, newEntry);
+        });
 
     promise->start();
     listFolderJob->start();
@@ -1434,6 +1452,17 @@ void Account::updateDesktopEnterpriseChannel()
     }
 }
 
+void Account::updateServerManagedSettings()
+{
+    _serverManagedSettings = sanitizeServerManagedSettings(_capabilities.desktopClientManagedSettings());
+    applyManagedProxySettings(ConfigFile().managedProxySettings(_serverManagedSettings));
+}
+
+ServerManagedSettings Account::serverManagedSettings() const
+{
+    return _serverManagedSettings;
+}
+
 QNetworkProxy::ProxyType Account::proxyType() const
 {
     return _proxyType;
@@ -1441,22 +1470,8 @@ QNetworkProxy::ProxyType Account::proxyType() const
 
 void Account::setProxyType(QNetworkProxy::ProxyType proxyType)
 {
-    if (_proxyType == proxyType) {
-        return;
-    }
-
-    _proxyType = proxyType;
-
-    auto proxy = _networkAccessManager->proxy();
-    proxy.setType(proxyType);
-    proxy.setHostName(proxyHostName());
-    proxy.setPort(proxyPort());
-    proxy.setUser(proxyUser());
-    proxy.setPassword(proxyPassword());
-    _networkAccessManager->setProxy(proxy);
-
-    PrivateCloudTransport::apply(_networkAccessManager.data());
-    Q_EMIT proxyTypeChanged();
+    _accountProxyType = proxyType;
+    updateProxyInUse();
 }
 
 QString Account::proxyHostName() const
@@ -1466,18 +1481,8 @@ QString Account::proxyHostName() const
 
 void Account::setProxyHostName(const QString &hostName)
 {
-    if (_proxyHostName == hostName) {
-        return;
-    }
-
-    _proxyHostName = hostName;
-
-    auto proxy = _networkAccessManager->proxy();
-    proxy.setHostName(hostName);
-    _networkAccessManager->setProxy(proxy);
-
-    PrivateCloudTransport::apply(_networkAccessManager.data());
-    Q_EMIT proxyHostNameChanged();
+    _accountProxyHostName = hostName;
+    updateProxyInUse();
 }
 
 int Account::proxyPort() const
@@ -1487,19 +1492,40 @@ int Account::proxyPort() const
 
 void Account::setProxyPort(const int port)
 {
-    if (_proxyPort == port) {
+    _accountProxyPort = port;
+    updateProxyInUse();
+}
+
+void Account::updateProxyInUse()
+{
+    // Only enforced policy overrides the account's own proxy; a default seeds a new account.
+    const auto proxyType = _managedProxy.typeEnforced ? static_cast<QNetworkProxy::ProxyType>(_managedProxy.proxyType) : _accountProxyType;
+    const auto hostName = _managedProxy.hostEnforced ? _managedProxy.proxyHostName : _accountProxyHostName;
+    const auto port = _managedProxy.portEnforced ? _managedProxy.proxyPort : _accountProxyPort;
+
+    const auto typeChanged = _proxyType != proxyType;
+    const auto hostNameChanged = _proxyHostName != hostName;
+    const auto portChanged = _proxyPort != port;
+    if (!typeChanged && !hostNameChanged && !portChanged) {
         return;
     }
 
+    _proxyType = proxyType;
+    _proxyHostName = hostName;
     _proxyPort = port;
 
-    auto proxy = _networkAccessManager->proxy();
-    proxy.setPort(port);
-    _networkAccessManager->setProxy(proxy);
+    applyProxyToNetworkAccessManager();
 
     PrivateCloudTransport::apply(_networkAccessManager.data());
-
-    Q_EMIT proxyPortChanged();
+    if (typeChanged) {
+        Q_EMIT proxyTypeChanged();
+    }
+    if (hostNameChanged) {
+        Q_EMIT proxyHostNameChanged();
+    }
+    if (portChanged) {
+        Q_EMIT proxyPortChanged();
+    }
 }
 
 bool Account::proxyNeedsAuth() const
@@ -1567,12 +1593,66 @@ void Account::setProxySettings(const QNetworkProxy::ProxyType proxyType,
                                const QString &user,
                                const QString &password)
 {
-    setProxyType(proxyType);
-    setProxyHostName(hostName);
-    setProxyPort(port);
+    // Enforced fields keep the policy value, credentials are never managed.
+    if (!_managedProxy.typeEnforced) {
+        _accountProxyType = proxyType;
+    }
+    if (!_managedProxy.hostEnforced) {
+        _accountProxyHostName = hostName;
+    }
+    if (!_managedProxy.portEnforced) {
+        _accountProxyPort = port;
+    }
+    updateProxyInUse();
     setProxyNeedsAuth(needsAuth);
     setProxyUser(user);
     setProxyPassword(password);
+}
+
+bool Account::proxySettingsAreManaged() const
+{
+    return _managedProxy.isEnforced;
+}
+
+void Account::applyManagedProxySettings(const ManagedProxySettings &managedProxy)
+{
+    _managedProxy = managedProxy;
+    updateProxyInUse();
+}
+
+const ManagedProxySettings &Account::managedProxySettings() const
+{
+    return _managedProxy;
+}
+
+void Account::applyProxyToNetworkAccessManager()
+{
+    if (!_networkAccessManager) {
+        return;
+    }
+    auto proxy = _networkAccessManager->proxy();
+    proxy.setType(_proxyType);
+    proxy.setHostName(_proxyHostName);
+    proxy.setPort(_proxyPort);
+    proxy.setUser(proxyUser());
+    proxy.setPassword(proxyPassword());
+    _networkAccessManager->setProxy(proxy);
+    PrivateCloudTransport::apply(_networkAccessManager.data());
+}
+
+QNetworkProxy::ProxyType Account::accountProxyType() const
+{
+    return _accountProxyType;
+}
+
+QString Account::accountProxyHostName() const
+{
+    return _accountProxyHostName;
+}
+
+int Account::accountProxyPort() const
+{
+    return _accountProxyPort;
 }
 
 Account::AccountNetworkTransferLimitSetting Account::uploadLimitSetting() const
@@ -1660,6 +1740,11 @@ void Account::setDownloadLimit(const unsigned int limit)
 bool Account::serverHasIntegration() const
 {
     return _serverHasIntegration;
+}
+
+QUuid Account::uuid() const
+{
+    return _uuid;
 }
 
 void Account::updateServerHasIntegration()

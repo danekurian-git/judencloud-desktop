@@ -20,11 +20,13 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcFlow2auth, "nextcloud.sync.credentials.flow2auth", QtInfoMsg)
 
-namespace {
+namespace
+{
 constexpr auto loginFlowPollIntervalSeconds = 3LL;
 constexpr auto pollTimerIntervalMilliseconds = 1000;
 }
@@ -104,7 +106,7 @@ void Flow2Auth::fetchNewToken(const TokenAction action)
         _loginUrl = loginUrl;
 
         if (_account->isUsernamePrefillSupported()) {
-            constexpr auto setUserNameForLogin = [] (const auto &userName, auto &loginUrl) -> void {
+            constexpr auto setUserNameForLogin = [](const auto &userName, auto &loginUrl) -> void {
                 auto query = QUrlQuery(loginUrl);
                 query.addQueryItem(QStringLiteral("user"), userName);
                 loginUrl.setQuery(query);
@@ -159,7 +161,7 @@ void Flow2Auth::slotPollTimerTimeout()
     _isBusy = true;
 
     _secondsLeft--;
-    if(_secondsLeft > 0) {
+    if (_secondsLeft > 0) {
         Q_EMIT statusChanged(PollStatus::statusPollCountdown, _secondsLeft);
         _isBusy = false;
         return;
@@ -237,12 +239,10 @@ QJsonObject Flow2Auth::handleResponse(QNetworkReply *reply)
     const auto jsonData = reply->readAll();
     QJsonParseError jsonParseError{};
     const auto json = QJsonDocument::fromJson(jsonData, &jsonParseError).object();
-    if (reply->error() == QNetworkReply::NoError && jsonParseError.error == QJsonParseError::NoError
-        && !json.isEmpty()) {
+    if (reply->error() == QNetworkReply::NoError && jsonParseError.error == QJsonParseError::NoError && !json.isEmpty()) {
         const auto isHttps = [&]() {
-            const auto endpoint = json["server"].toString().isEmpty()
-                ? json.value("poll").toObject().value("endpoint").toString() //from login/v2 endpoint
-                : json["server"].toString(); //from login/v2/poll endpoint
+            const auto endpoint = json["server"].toString().isEmpty() ? json.value("poll").toObject().value("endpoint").toString() // from login/v2 endpoint
+                                                                      : json["server"].toString(); // from login/v2/poll endpoint
 
             if (endpoint.isEmpty()) {
                 return false;
@@ -258,8 +258,9 @@ QJsonObject Flow2Auth::handleResponse(QNetworkReply *reply)
 
         if (_enforceHttps && !isHttps()) {
             qCWarning(lcFlow2auth) << "Returned server url | poll endpoint does not start with https";
-            Q_EMIT result(Error, tr("The returned server URL does not start with HTTPS despite the login URL started with HTTPS. "
-                                  "Login will not be possible because this might be a security issue. Please contact your administrator."));
+            Q_EMIT result(Error,
+                          tr("The returned server URL does not start with HTTPS despite the login URL started with HTTPS. "
+                             "Login will not be possible because this might be a security issue. Please contact your administrator."));
             return {};
         }
     }
@@ -269,34 +270,36 @@ QJsonObject Flow2Auth::handleResponse(QNetworkReply *reply)
         const auto httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
         if (httpStatus == 503) {
-            errorReason = tr("The server is temporarily unavailable because it is in maintenance mode. "
-                             "Please try again once maintenance has finished.");
-        } else if (const auto errorFromJson = json["error"].toString();
-            !errorFromJson.isEmpty()) {
-            errorReason = tr("An unexpected error occurred when trying to access the server. "
-                "Please try to access it again later or contact your server administrator if the issue continues.");
+            errorReason =
+                tr("The server is temporarily unavailable because it is in maintenance mode. "
+                   "Please try again once maintenance has finished.");
+        } else if (const auto errorFromJson = json["error"].toString(); !errorFromJson.isEmpty()) {
+            errorReason =
+                tr("An unexpected error occurred when trying to access the server. "
+                   "Please try to access it again later or contact your server administrator if the issue continues.");
             qCWarning(lcFlow2auth) << "Error returned from JSON:" << errorFromJson;
         } else if (reply->error() != QNetworkReply::NoError) {
             auto errorStringFromReply = reply->errorString();
             if (const auto hstsError = AbstractNetworkJob::hstsErrorStringFromReply(reply)) {
                 errorStringFromReply = *hstsError;
             }
-            errorReason = tr("An unexpected error occurred when trying to access the server. "
-                "Please try to access it again later or contact your server administrator if the issue continues.");
+            errorReason =
+                tr("An unexpected error occurred when trying to access the server. "
+                   "Please try to access it again later or contact your server administrator if the issue continues.");
             qCWarning(lcFlow2auth) << "Error string returned from the server:" << errorStringFromReply;
         } else if (jsonParseError.error != QJsonParseError::NoError || json.isEmpty()) {
             // Could not parse the JSON returned from the server
-            errorReason = tr("We couldn't parse the server response. "
-                "Please try connecting again later or contact your server administrator if the issue continues.");
+            errorReason =
+                tr("We couldn't parse the server response. "
+                   "Please try connecting again later or contact your server administrator if the issue continues.");
         } else if (json.isEmpty()) {
             // The reply from the server did not contain all expected fields
-            errorReason = tr("The server did not reply with the expected data. "
-                "Please try connecting again later or contact your server administrator if the issue continues.");
+            errorReason =
+                tr("The server did not reply with the expected data. "
+                   "Please try connecting again later or contact your server administrator if the issue continues.");
         }
 
-        qCWarning(lcFlow2auth) << "Error when requesting:" << reply->url()
-                               << "- json returned:" << json
-                               << "- http status code:" << httpStatus
+        qCWarning(lcFlow2auth) << "Error when requesting:" << reply->url() << "- json returned:" << json << "- http status code:" << httpStatus
                                << "- error:" << jsonParseError.errorString();
 
         // We get a 404 until authentication is done, so don't show this error in the GUI.

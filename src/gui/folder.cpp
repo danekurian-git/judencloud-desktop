@@ -172,6 +172,11 @@ void Folder::setSecurityScopedAccess(std::unique_ptr<Utility::MacSandboxPersiste
     _securityScopedAccess = std::move(access);
 }
 
+bool Folder::hasSecurityScopedAccess() const
+{
+    return _securityScopedAccess != nullptr;
+}
+
 bool Folder::needsSandboxBookmark() const
 {
     return _needsSandboxBookmark;
@@ -387,6 +392,11 @@ void Folder::setPrivateCloudSetupPending(bool pending)
 
 bool Folder::canSync() const
 {
+#ifdef Q_OS_MACOS
+    if (_needsSandboxBookmark) {
+        return false;
+    }
+#endif
     return !syncPaused() && accountState()->isConnected() && _syncResult.status() != SyncResult::SetupError;
 }
 
@@ -633,6 +643,7 @@ void Folder::startVfs()
     qCDebug(lcFolder) << "Display name for VFS folder will be:" << displayName;
     VfsSetupParams vfsParams;
     vfsParams.filesystemPath = path();
+    vfsParams.rootPath = FileSystem::Path{path()};
     vfsParams.displayName = displayName;
     vfsParams.alias = alias();
     vfsParams.navigationPaneClsid = navigationPaneClsid().toString();
@@ -642,6 +653,7 @@ void Folder::startVfs()
     // The provider name forms the persistent Windows sync-root identifier.
     vfsParams.providerName = QStringLiteral(APPLICATION_NAME);
     vfsParams.providerVersion = Theme::instance()->version();
+    vfsParams.socketPath = FolderMan::instance()->socketApi()->socketPath();
     vfsParams.multipleAccountsRegistered = AccountManager::instance()->accounts().size() > 1;
 
     connect(_vfs.data(), &Vfs::beginHydrating, this, &Folder::slotHydrationStarts, Qt::UniqueConnection);
@@ -649,6 +661,14 @@ void Folder::startVfs()
     connect(_vfs.data(), &Vfs::failureHydrating, this, &Folder::slotHydrationFailed, Qt::UniqueConnection);
 
     connect(&_engine->syncFileStatusTracker(), &SyncFileStatusTracker::fileStatusChanged, _vfs.data(), &Vfs::fileStatusChanged, Qt::UniqueConnection);
+
+    connect(_vfs.get(), &Vfs::needSync, this, [this] {
+        if (canSync()) {
+            // the vfs plugin detected that its metadata is out of sync and requests a new sync
+            // the request has a hight priority as it is probably issued after a user request
+            FolderMan::instance()->scheduleFolder(this);
+        }
+    });
 
     _vfs->start(vfsParams);
 

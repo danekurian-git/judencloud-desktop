@@ -10,12 +10,14 @@
 #include <QUrl>
 
 #include "configfile.h"
+#include "managedsettingstestutils.h"
 #include "theme.h"
 #include "urischemehandler.h"
 #include "account.h"
 #include "config.h"
 
 using namespace OCC;
+using namespace Qt::StringLiterals;
 
 Q_DECLARE_METATYPE(OCC::UriSchemeHandler::Action)
 
@@ -45,6 +47,19 @@ private Q_SLOTS:
         QVERIFY(!rejected.error.isEmpty());
     }
 
+    // Keeps tests off the device policy of the machine running them.
+    void init()
+    {
+        ConfigFile::setDeviceSourcesFactory([] {
+            return std::vector<std::unique_ptr<SettingSource>>{};
+        });
+    }
+
+    void cleanup()
+    {
+        ConfigFile::setDeviceSourcesFactory({});
+    }
+
     void parseUri_data()
     {
         QTest::addColumn<QUrl>("url");
@@ -52,71 +67,35 @@ private Q_SLOTS:
         QTest::addColumn<QUrl>("expectedServerUrl");
         QTest::addColumn<bool>("expectError");
 
-        QTest::newRow("login")
-            << QUrl(QStringLiteral("nc://login/server:https://cloud.example.com"))
-            << UriSchemeHandler::Action::Login
-            << QUrl(QStringLiteral("https://cloud.example.com"))
-            << false;
+        QTest::newRow("login") << QUrl(QStringLiteral("nc://login/server:https://cloud.example.com")) << UriSchemeHandler::Action::Login
+                               << QUrl(QStringLiteral("https://cloud.example.com")) << false;
 
-        QTest::newRow("login encoded server")
-            << QUrl(QStringLiteral("nc://login/server:https%3A%2F%2Fcloud.example.com"))
-            << UriSchemeHandler::Action::Login
-            << QUrl(QStringLiteral("https://cloud.example.com"))
-            << false;
+        QTest::newRow("login encoded server") << QUrl(QStringLiteral("nc://login/server:https%3A%2F%2Fcloud.example.com")) << UriSchemeHandler::Action::Login
+                                              << QUrl(QStringLiteral("https://cloud.example.com")) << false;
 
-        QTest::newRow("login uppercase host")
-            << QUrl(QStringLiteral("nc://LOGIN/server:https://cloud.example.com"))
-            << UriSchemeHandler::Action::Login
-            << QUrl(QStringLiteral("https://cloud.example.com"))
-            << false;
+        QTest::newRow("login uppercase host") << QUrl(QStringLiteral("nc://LOGIN/server:https://cloud.example.com")) << UriSchemeHandler::Action::Login
+                                              << QUrl(QStringLiteral("https://cloud.example.com")) << false;
 
-        QTest::newRow("login missing server prefix")
-            << QUrl(QStringLiteral("nc://login/https://cloud.example.com"))
-            << UriSchemeHandler::Action::Invalid
-            << QUrl{}
-            << true;
+        QTest::newRow("login missing server prefix") << QUrl(QStringLiteral("nc://login/https://cloud.example.com")) << UriSchemeHandler::Action::Invalid
+                                                     << QUrl{} << true;
 
-        QTest::newRow("login missing server url")
-            << QUrl(QStringLiteral("nc://login/server:"))
-            << UriSchemeHandler::Action::Invalid
-            << QUrl{}
-            << true;
+        QTest::newRow("login missing server url") << QUrl(QStringLiteral("nc://login/server:")) << UriSchemeHandler::Action::Invalid << QUrl{} << true;
 
-        QTest::newRow("login relative server url")
-            << QUrl(QStringLiteral("nc://login/server:cloud.example.com"))
-            << UriSchemeHandler::Action::Invalid
-            << QUrl{}
-            << true;
+        QTest::newRow("login relative server url") << QUrl(QStringLiteral("nc://login/server:cloud.example.com")) << UriSchemeHandler::Action::Invalid << QUrl{}
+                                                   << true;
 
-        QTest::newRow("login hostless server url")
-            << QUrl(QStringLiteral("nc://login/server:https://"))
-            << UriSchemeHandler::Action::Invalid
-            << QUrl{}
-            << true;
+        QTest::newRow("login hostless server url") << QUrl(QStringLiteral("nc://login/server:https://")) << UriSchemeHandler::Action::Invalid << QUrl{} << true;
 
         QTest::newRow("login unsupported server url scheme")
-            << QUrl(QStringLiteral("nc://login/server:ftp://cloud.example.com"))
-            << UriSchemeHandler::Action::Invalid
-            << QUrl{}
-            << true;
+            << QUrl(QStringLiteral("nc://login/server:ftp://cloud.example.com")) << UriSchemeHandler::Action::Invalid << QUrl{} << true;
 
-        QTest::newRow("old add account")
-            << QUrl(QStringLiteral("nc://addAccount/?serverUrl=https%3A%2F%2Fcloud.example.com"))
-            << UriSchemeHandler::Action::Invalid
-            << QUrl{}
-            << true;
+        QTest::newRow("old add account") << QUrl(QStringLiteral("nc://addAccount/?serverUrl=https%3A%2F%2Fcloud.example.com"))
+                                         << UriSchemeHandler::Action::Invalid << QUrl{} << true;
 
-        QTest::newRow("local edit")
-            << QUrl(QStringLiteral("nc://open/admin@cloud.example.com/Documents/file.txt?token=secret"))
-            << UriSchemeHandler::Action::OpenLocalEdit
-            << QUrl{}
-            << false;
+        QTest::newRow("local edit") << QUrl(QStringLiteral("nc://open/admin@cloud.example.com/Documents/file.txt?token=secret"))
+                                    << UriSchemeHandler::Action::OpenLocalEdit << QUrl{} << false;
 
-        QTest::newRow("unknown action")
-            << QUrl(QStringLiteral("nc://unknown/"))
-            << UriSchemeHandler::Action::Invalid
-            << QUrl{}
-            << true;
+        QTest::newRow("unknown action") << QUrl(QStringLiteral("nc://unknown/")) << UriSchemeHandler::Action::Invalid << QUrl{} << true;
     }
 
     void parseUri()
@@ -188,6 +167,46 @@ private Q_SLOTS:
         QVERIFY(!rejectedResult.error.isEmpty());
     }
 
+    void parseUriRestrictsOnlyForLockedManagedServerOverride_data()
+    {
+        QTest::addColumn<bool>("enforced");
+
+        QTest::newRow("device default") << false;
+        QTest::newRow("device policy") << true;
+    }
+
+    void parseUriRestrictsOnlyForLockedManagedServerOverride()
+    {
+        QFETCH(bool, enforced);
+
+        ConfigFile cfg;
+        auto theme = Theme::instance();
+        const auto previousOverrideServerUrl = theme->overrideServerUrl();
+        const auto previousForceOverrideServerUrl = theme->forceOverrideServerUrl();
+        const auto restoreTheme = qScopeGuard([theme, previousOverrideServerUrl, previousForceOverrideServerUrl] {
+            theme->setOverrideServerUrl(previousOverrideServerUrl);
+            theme->setForceOverrideServerUrl(previousForceOverrideServerUrl);
+        });
+
+        cfg.clearOverrideServerUrl();
+        theme->setOverrideServerUrl(QString{});
+        theme->setForceOverrideServerUrl(false);
+        ConfigFile::setDeviceSourcesFactory([enforced] {
+            std::vector<std::unique_ptr<SettingSource>> sources;
+            sources.push_back(std::make_unique<MapSource>(enforced ? SettingSourceType::PlatformPolicy : SettingSourceType::PlatformDefault,
+                                                          enforced ? EnforcementState::Enforced : EnforcementState::NotEnforced,
+                                                          enforced ? 200 : 20,
+                                                          QVariantMap{{u"overrideServerUrl"_s, u"https://configured.example.com"_s}}));
+            return sources;
+        });
+
+        const auto configuredResult = UriSchemeHandler::parseUri(QUrl(u"nc://login/server:https://configured.example.com"_s));
+        QCOMPARE(configuredResult.action, UriSchemeHandler::Action::Login);
+
+        const auto otherResult = UriSchemeHandler::parseUri(QUrl(u"nc://login/server:https://unconfigured.example.com"_s));
+        QCOMPARE(otherResult.action, enforced ? UriSchemeHandler::Action::Invalid : UriSchemeHandler::Action::Login);
+    }
+
     void parseUriHonoursMultipleServerOverrides()
     {
         auto theme = Theme::instance();
@@ -198,11 +217,11 @@ private Q_SLOTS:
             theme->setForceOverrideServerUrl(previousForceOverrideServerUrl);
         });
 
-        theme->setOverrideServerUrl(QStringLiteral(
-            "["
-            R"({"name": "Primary", "url": "https://primary.example.com"},)"
-            R"({"name": "Secondary", "url": "https://secondary.example.com"})"
-            "]"));
+        theme->setOverrideServerUrl(
+            QStringLiteral("["
+                           R"({"name": "Primary", "url": "https://primary.example.com"},)"
+                           R"({"name": "Secondary", "url": "https://secondary.example.com"})"
+                           "]"));
         theme->setForceOverrideServerUrl(true);
 
         const auto acceptedResult = UriSchemeHandler::parseUri(QUrl(QStringLiteral("nc://login/server:https://secondary.example.com")));

@@ -24,7 +24,7 @@
 using namespace OCC;
 using namespace Qt::StringLiterals;
 
-class TestAccount: public QObject
+class TestAccount : public QObject
 {
     Q_OBJECT
 
@@ -35,6 +35,47 @@ private Q_SLOTS:
         OCC::Logger::instance()->setLogDebug(true);
 
         QStandardPaths::setTestModeEnabled(true);
+    }
+
+    void internalLinkUrl_data()
+    {
+        QTest::addColumn<QString>("baseUrl");
+        QTest::addColumn<QVariantMap>("capabilities");
+        QTest::addColumn<QByteArray>("fileId");
+        QTest::addColumn<QString>("expectedUrl");
+
+        const auto globalScale = QVariantMap{{u"globalscale"_s, QVariantMap{{u"token"_s, u"abc123"_s}}}};
+        QTest::newRow("ordinary") << u"https://example.com"_s << QVariantMap{} << "42"_ba << u"https://example.com/index.php/f/42"_s;
+        QTest::newRow("older-gss") << u"https://example.com"_s << QVariantMap{{u"globalscale"_s, QVariantMap{{u"enabled"_s, true}}}} << "42"_ba
+                                   << u"https://example.com/index.php/f/42"_s;
+        QTest::newRow("gss-token") << u"https://example.com"_s << globalScale << "42"_ba << u"https://example.com/index.php/gf/abc123/42"_s;
+        QTest::newRow("subdirectory") << u"https://example.com/nextcloud/"_s << globalScale << "42"_ba
+                                      << u"https://example.com/nextcloud/index.php/gf/abc123/42"_s;
+        QTest::newRow("ordinary-subdirectory") << u"https://example.com/nextcloud"_s << QVariantMap{} << "42"_ba
+                                               << u"https://example.com/nextcloud/index.php/f/42"_s;
+        QTest::newRow("empty-token") << u"https://example.com"_s << QVariantMap{{u"globalscale"_s, QVariantMap{{u"token"_s, QString{}}}}} << "42"_ba
+                                     << u"https://example.com/index.php/f/42"_s;
+        QTest::newRow("malformed-token") << u"https://example.com"_s << QVariantMap{{u"globalscale"_s, QVariantMap{{u"token"_s, 123}}}} << "42"_ba
+                                         << u"https://example.com/index.php/f/42"_s;
+        QTest::newRow("encoded-token") << u"https://example.com"_s << QVariantMap{{u"globalscale"_s, QVariantMap{{u"token"_s, u"a/b?#%"_s}}}} << "42"_ba
+                                       << u"https://example.com/index.php/gf/a%2Fb%3F%23%25/42"_s;
+        QTest::newRow("encoded-base-path") << u"https://example.com/cloud%20files/"_s << globalScale << "42"_ba
+                                           << u"https://example.com/cloud%20files/index.php/gf/abc123/42"_s;
+        QTest::newRow("encoded-id") << u"https://example.com"_s << globalScale << "42/7?#%"_ba << u"https://example.com/index.php/gf/abc123/42%2F7%3F%23%25"_s;
+        QTest::newRow("empty-id") << u"https://example.com"_s << globalScale << QByteArray{} << QString{};
+        QTest::newRow("empty-id-without-gss") << u"https://example.com"_s << QVariantMap{} << QByteArray{} << QString{};
+    }
+
+    void internalLinkUrl()
+    {
+        QFETCH(QString, baseUrl);
+        QFETCH(QVariantMap, capabilities);
+        QFETCH(QByteArray, fileId);
+        QFETCH(QString, expectedUrl);
+        const auto account = Account::create();
+        account->setUrl(QUrl{baseUrl});
+        account->setCapabilities(capabilities);
+        QCOMPARE(account->internalLinkUrl(fileId).toString(QUrl::FullyEncoded), expectedUrl);
     }
 
     void testAccountDavPath_unitialized_noCrash()
@@ -56,18 +97,19 @@ private Q_SLOTS:
         const auto legacyKey = AbstractCredentials::keychainKey(account->url().toString(), QStringLiteral("login-alias_app-password"), account->id());
         auto store = QHash<QString, QByteArray>{};
         auto operations = QStringList{};
-        account->_appPasswordStoreOverride = [&store, &operations](Account::AppPasswordOperation op, const QString &key, const QByteArray &data, Account::AppPasswordCallback callback) {
-            operations.append(key);
-            if (op == Account::AppPasswordOperation::Write) {
-                store.insert(key, data);
-                callback(Account::AppPasswordResult::Success, {});
-            } else if (op == Account::AppPasswordOperation::Delete) {
-                store.remove(key);
-                callback(Account::AppPasswordResult::Success, {});
-            } else {
-                callback(store.contains(key) ? Account::AppPasswordResult::Success : Account::AppPasswordResult::Missing, store.value(key));
-            }
-        };
+        account->_appPasswordStoreOverride =
+            [&store, &operations](Account::AppPasswordOperation op, const QString &key, const QByteArray &data, Account::AppPasswordCallback callback) {
+                operations.append(key);
+                if (op == Account::AppPasswordOperation::Write) {
+                    store.insert(key, data);
+                    callback(Account::AppPasswordResult::Success, {});
+                } else if (op == Account::AppPasswordOperation::Delete) {
+                    store.remove(key);
+                    callback(Account::AppPasswordResult::Success, {});
+                } else {
+                    callback(store.contains(key) ? Account::AppPasswordResult::Success : Account::AppPasswordResult::Missing, store.value(key));
+                }
+            };
         auto retrieved = QSignalSpy(account.data(), &Account::appPasswordRetrieved);
         account->writeAppPasswordOnce(QStringLiteral("synthetic-token"));
         account->writeAppPasswordOnce(QStringLiteral("must-not-overwrite"));
@@ -107,11 +149,12 @@ private Q_SLOTS:
         account->setCredentials(new FakeCredentials(new FakeQNAM({})));
         account->setDavUser(QStringLiteral("canonical-user-id"));
         auto reads = 0;
-        account->_appPasswordStoreOverride = [&reads, missing](Account::AppPasswordOperation op, const QString &, const QByteArray &, Account::AppPasswordCallback callback) {
-            QCOMPARE(op, Account::AppPasswordOperation::Read);
-            ++reads;
-            callback(missing ? Account::AppPasswordResult::Missing : Account::AppPasswordResult::Error, {});
-        };
+        account->_appPasswordStoreOverride =
+            [&reads, missing](Account::AppPasswordOperation op, const QString &, const QByteArray &, Account::AppPasswordCallback callback) {
+                QCOMPARE(op, Account::AppPasswordOperation::Read);
+                ++reads;
+                callback(missing ? Account::AppPasswordResult::Missing : Account::AppPasswordResult::Error, {});
+            };
         auto retrieved = QSignalSpy(account.data(), &Account::appPasswordRetrieved);
         account->retrieveAppPassword();
         QCOMPARE(retrieved.count(), 1);
@@ -127,9 +170,10 @@ private Q_SLOTS:
         account->setCredentials(new FakeCredentials(new FakeQNAM({})));
         account->setDavUser(QStringLiteral("first-user"));
         auto pending = Account::AppPasswordCallback{};
-        account->_appPasswordStoreOverride = [&pending](Account::AppPasswordOperation, const QString &, const QByteArray &, Account::AppPasswordCallback callback) {
-            pending = std::move(callback);
-        };
+        account->_appPasswordStoreOverride =
+            [&pending](Account::AppPasswordOperation, const QString &, const QByteArray &, Account::AppPasswordCallback callback) {
+                pending = std::move(callback);
+            };
         auto retrieved = QSignalSpy(account.data(), &Account::appPasswordRetrieved);
         account->retrieveAppPassword();
         QVERIFY(pending);
@@ -354,13 +398,13 @@ private Q_SLOTS:
         QTest::addColumn<QString>("subPath");
         QTest::addColumn<QStringList>("expectedPaths");
 
-        QTest::newRow("root = /; requesting ''") << "" << "" << QStringList{ "A", "B", "C", "S" };
-        QTest::newRow("root = /; requesting A/") << "" << "A/" << QStringList{ "A/a1", "A/a2", "A/sub1" };
-        QTest::newRow("root = /; requesting A/sub1/") << "" << "A/sub1/" << QStringList{ "A/sub1/sub2" };
+        QTest::newRow("root = /; requesting ''") << "" << "" << QStringList{"A", "B", "C", "S"};
+        QTest::newRow("root = /; requesting A/") << "" << "A/" << QStringList{"A/a1", "A/a2", "A/sub1"};
+        QTest::newRow("root = /; requesting A/sub1/") << "" << "A/sub1/" << QStringList{"A/sub1/sub2"};
         QTest::newRow("root = /; requesting A/sub1/sub2") << "" << "A/sub1/sub2/" << QStringList{};
         QTest::newRow("root = /; requesting A/sub_nodownload/") << "" << "A/sub_nodownload/" << QStringList{};
-        QTest::newRow("root = /A; requesting A/") << "/A" << "A/" << QStringList{ "a1", "a2", "sub1" };
-        QTest::newRow("root = /A; requesting A/sub1") << "/A" << "A/sub1/" << QStringList{ "sub1/sub2" };
+        QTest::newRow("root = /A; requesting A/") << "/A" << "A/" << QStringList{"a1", "a2", "sub1"};
+        QTest::newRow("root = /A; requesting A/sub1") << "/A" << "A/sub1/" << QStringList{"sub1/sub2"};
         QTest::newRow("root = /A; requesting A/sub1/sub2") << "/A" << "A/sub1/sub2/" << QStringList{};
         QTest::newRow("root = /A; requesting A/sub_nodownload/") << "/A" << "A/sub_nodownload/" << QStringList{};
         QTest::newRow("root = /shared_nodownload; requesting shared_nodownload/") << "/shared_nodownload" << "shared_nodownload/" << QStringList{};
@@ -386,9 +430,9 @@ private Q_SLOTS:
                 makeSharedNoDownload(subItem);
             }
         };
-        FileInfo sharedNoDownload { "shared_nodownload"_L1, { { "file1"_L1, 32 }, { "file2"_L1, 32 } } };
-        FileInfo sharedNoDownloadSub { "subdir"_L1, { { "file3"_L1, 32 }, { "file4"_L1, 32 } } };
-        FileInfo aSubSharedNoDownload { "sub_nodownload"_L1, { { "file4"_L1, 32 }, { "file5"_L1, 32 } } };
+        FileInfo sharedNoDownload{"shared_nodownload"_L1, {{"file1"_L1, 32}, {"file2"_L1, 32}}};
+        FileInfo sharedNoDownloadSub{"subdir"_L1, {{"file3"_L1, 32}, {"file4"_L1, 32}}};
+        FileInfo aSubSharedNoDownload{"sub_nodownload"_L1, {{"file4"_L1, 32}, {"file5"_L1, 32}}};
         sharedNoDownload.children.insert(sharedNoDownloadSub.name, std::move(sharedNoDownloadSub));
         makeSharedNoDownload(sharedNoDownload);
         makeSharedNoDownload(aSubSharedNoDownload);
@@ -405,18 +449,19 @@ private Q_SLOTS:
 
         QList<QString> receivedPaths;
 
-        QObject::connect(&lsPropFutureWatcher, &QFutureWatcher<QStringList>::finished,
-                            &localEventLoop, [&localEventLoop] () {
-                                qInfo() << "ls prop finished";
-                                localEventLoop.quit();
-                            });
+        QObject::connect(&lsPropFutureWatcher, &QFutureWatcher<QStringList>::finished, &localEventLoop, [&localEventLoop]() {
+            qInfo() << "ls prop finished";
+            localEventLoop.quit();
+        });
 
-        QObject::connect(&lsPropFutureWatcher, &QFutureWatcher<QStringList>::resultReadyAt,
-                            &localEventLoop, [&receivedPaths, &lsPropFutureWatcher] (int resultIndex) {
-                                qInfo() << "ls prop result at index" << resultIndex;
-                                const auto &newResultEntries = lsPropFutureWatcher.resultAt(resultIndex);
-                                receivedPaths.append(newResultEntries.fullPath);
-                            });
+        QObject::connect(&lsPropFutureWatcher,
+                         &QFutureWatcher<QStringList>::resultReadyAt,
+                         &localEventLoop,
+                         [&receivedPaths, &lsPropFutureWatcher](int resultIndex) {
+                             qInfo() << "ls prop result at index" << resultIndex;
+                             const auto &newResultEntries = lsPropFutureWatcher.resultAt(resultIndex);
+                             receivedPaths.append(newResultEntries.fullPath);
+                         });
 
         fakeFolder.syncJournal().clearFileTable(); // pretend we only need to fetch placeholders
 

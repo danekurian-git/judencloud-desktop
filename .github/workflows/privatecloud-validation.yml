@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: privateCloud Windows helper and installer tests
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, 'privatecloud/**']
+  pull_request:
+    paths:
+      - 'admin/win/privatecloud/**'
+      - 'admin/win/privatecloud-direct-broker/**'
+      - '.github/workflows/privatecloud-validation.yml'
+permissions:
+  contents: read
+concurrency:
+  group: privatecloud-native-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-and-installer:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Configure Windows helper
+        shell: pwsh
+        run: cmake -S admin/win/privatecloud-direct-broker -B build/direct-broker -G "Visual Studio 17 2022" -A x64
+      - name: Build Windows helper and regression tests
+        shell: pwsh
+        run: cmake --build build/direct-broker --config Release --parallel 4
+      - name: Test scoped routing, lifecycle and unrelated notifications
+        shell: pwsh
+        run: ctest --test-dir build/direct-broker -C Release --output-on-failure --timeout 60
+      - name: Test installer payload admission and source snapshots
+        shell: pwsh
+        run: python -B -m unittest discover -s admin/win/privatecloud -p "test_*.py" -v
+      - name: Test installer, integration and setup presentation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($test in @('test-installer.ps1', 'test-machine-installer.ps1', 'test-machine-windows-integration.ps1', 'test-setup-bootstrap.ps1', 'test-setup-presentation.ps1', 'test-setup-progress.ps1')) {
+            & (Join-Path 'admin/win/privatecloud' $test)
+            if ($LASTEXITCODE -ne 0) { throw "$test failed" }
+          }

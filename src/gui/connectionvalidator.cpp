@@ -24,7 +24,8 @@
 #include <creds/abstractcredentials.h>
 #include "systray.h"
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcConnectionValidator, "nextcloud.sync.connectionvalidator", QtInfoMsg)
 
@@ -40,8 +41,7 @@ ConnectionValidator::ConnectionValidator(AccountStatePtr accountState, const QSt
     , _termsOfServiceChecker(_account)
     , _localNetworkPermissionCheck(LocalNetworkPermission::checkDeniedForConnection)
 {
-    connect(&_termsOfServiceChecker, &TermsOfServiceChecker::done,
-            this, &ConnectionValidator::termsOfServiceCheckDone);
+    connect(&_termsOfServiceChecker, &TermsOfServiceChecker::done, this, &ConnectionValidator::termsOfServiceCheckDone);
 }
 
 void ConnectionValidator::checkServerAndAuth()
@@ -61,15 +61,22 @@ void ConnectionValidator::checkServerAndAuth()
         return;
     }
 
-    // Lookup system proxy in a thread https://github.com/owncloud/client/issues/2993
-    if (ClientProxy::isUsingSystemDefault() || _account->proxyType() == QNetworkProxy::DefaultProxy) {
+    switch (ClientProxy::accountProxyMode(*_account)) {
+    case ClientProxy::AccountProxyMode::SystemProxy:
+        // Lookup system proxy in a thread https://github.com/owncloud/client/issues/2993
         qCDebug(lcConnectionValidator) << "Trying to look up system proxy";
         ClientProxy::lookupSystemProxyAsync(_account->url(), this, SLOT(systemProxyLookupDone(QNetworkProxy)));
-    } else {
+        break;
+    case ClientProxy::AccountProxyMode::AccountProxy:
+        _account->applyProxyToNetworkAccessManager();
+        QMetaObject::invokeMethod(this, "slotCheckRedirectCostFreeUrl", Qt::QueuedConnection);
+        break;
+    case ClientProxy::AccountProxyMode::ApplicationProxy:
         // We want to reset the QNAM proxy so that the global proxy settings are used (via ClientProxy settings)
         _account->networkAccessManager()->setProxy(QNetworkProxy(QNetworkProxy::DefaultProxy));
         // use a queued invocation so we're as asynchronous as with the other code path
         QMetaObject::invokeMethod(this, "slotCheckRedirectCostFreeUrl", Qt::QueuedConnection);
+        break;
     }
 }
 
@@ -137,10 +144,8 @@ void ConnectionValidator::slotStatusFound(const QUrl &url, const QJsonObject &in
     QString serverVersion = CheckServerJob::version(info);
 
     // status.php was found.
-    qCInfo(lcConnectionValidator) << "** Application: Nextcloud found: "
-                                  << url << " with version "
-                                  << CheckServerJob::versionString(info)
-                                  << "(" << serverVersion << ")";
+    qCInfo(lcConnectionValidator) << "** Application: Nextcloud found: " << url << " with version " << CheckServerJob::versionString(info) << "("
+                                  << serverVersion << ")";
 
     // Update server url in case of redirection
     if (_account->url() != url) {
@@ -209,6 +214,11 @@ void ConnectionValidator::checkAuthentication()
 {
     AbstractCredentials *creds = _account->credentials();
 
+    if (_account->isPublicShareLink()) {
+        slotAuthSuccess();
+        return;
+    }
+
     if (!creds->ready()) {
         reportResult(CredentialsNotReady);
         return;
@@ -234,8 +244,7 @@ void ConnectionValidator::slotAuthFailed(QNetworkReply *reply)
         _errors << job->errorStringParsingBody();
         stat = SslError;
 
-    } else if (reply->error() == QNetworkReply::AuthenticationRequiredError
-        || !_account->credentials()->stillValid(reply)) {
+    } else if (reply->error() == QNetworkReply::AuthenticationRequiredError || !_account->credentials()->stillValid(reply)) {
         qCWarning(lcConnectionValidator) << "******** Password is wrong!" << reply->error() << job->errorString();
         _errors << tr("The provided credentials are not correct");
         stat = CredentialsWrong;
@@ -244,8 +253,7 @@ void ConnectionValidator::slotAuthFailed(QNetworkReply *reply)
         QByteArray body;
         _errors << job->errorStringParsingBody(&body);
 
-        const int httpStatus =
-            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (httpStatus == 503) {
             _errors.clear();
             stat = ServiceUnavailable;
@@ -332,8 +340,7 @@ bool ConnectionValidator::setAndCheckServerVersion(const QString &version)
     // Actual decision if we should use HTTP/2 is done in AccessManager::createRequest
     if (auto job = qobject_cast<AbstractNetworkJob *>(sender())) {
         if (auto reply = job->reply()) {
-            _account->setHttp2Supported(
-                reply->attribute(QNetworkRequest::Http2WasUsedAttribute).toBool());
+            _account->setHttp2Supported(reply->attribute(QNetworkRequest::Http2WasUsedAttribute).toBool());
         }
     }
     return true;
@@ -346,7 +353,7 @@ void ConnectionValidator::checkServerTermsOfService()
 
 void ConnectionValidator::slotUserFetched(UserInfo *userInfo)
 {
-    if(userInfo) {
+    if (userInfo) {
         userInfo->setActive(false);
         userInfo->deleteLater();
     }
@@ -370,7 +377,8 @@ void ConnectionValidator::termsOfServiceCheckDone()
 }
 
 #ifndef TOKEN_AUTH_ONLY
-void ConnectionValidator::reportConnected() {
+void ConnectionValidator::reportConnected()
+{
     reportResult(Connected);
 }
 #endif
@@ -381,7 +389,7 @@ void ConnectionValidator::reportResult(Status status)
 
     // TODO: notify user of errors
     if (!_errors.isEmpty() && _previousErrors != _errors) {
-       qCWarning(lcConnectionValidator) << "Connection issues:" << _errors;
+        qCWarning(lcConnectionValidator) << "Connection issues:" << _errors;
     }
 
     deleteLater();
@@ -440,10 +448,9 @@ void TermsOfServiceChecker::checkServerTermsOfService()
     auto *job = new JsonApiJob(_account, QLatin1String("ocs/v2.php/apps/terms_of_service/terms"), this);
     job->setTimeout(timeoutToUseMsec);
     QObject::connect(job, &JsonApiJob::jsonReceived, this, &TermsOfServiceChecker::slotServerTermsOfServiceRecieved);
-    QObject::connect(job, &JsonApiJob::networkError, this, [] (QNetworkReply *reply)
-                     {
-                         qCInfo(lcConnectionValidator()) << "network error" << reply->error();
-                     });
+    QObject::connect(job, &JsonApiJob::networkError, this, [](QNetworkReply *reply) {
+        qCInfo(lcConnectionValidator()) << "network error" << reply->error();
+    });
     job->start();
 }
 
