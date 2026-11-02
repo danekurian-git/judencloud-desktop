@@ -27,6 +27,8 @@ namespace OCC {
 
 class SelectiveSyncDialog;
 class AccountState;
+class PrivateCloudAuthentication;
+class Folder;
 
 /**
  * Backend for the QML account wizard.
@@ -45,6 +47,7 @@ class AccountWizardController : public QObject
     Q_PROPERTY(bool startLoginFlowAutomatically READ startLoginFlowAutomatically CONSTANT)
     Q_PROPERTY(QStringList overrideServerNames READ overrideServerNames NOTIFY overrideServerSelectionChanged)
     Q_PROPERTY(int overrideServerIndex READ overrideServerIndex WRITE setOverrideServerIndex NOTIFY overrideServerSelectionChanged)
+    Q_PROPERTY(bool privateCloudMode READ privateCloudMode CONSTANT)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool authPolling READ authPolling NOTIFY authPollingChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged)
@@ -99,7 +102,8 @@ public:
         BrowserAuthStep,
         BasicAuthStep,
         SyncOptionsStep,
-        CompletedStep
+        CompletedStep,
+        DriveSetupStep,
     };
     Q_ENUM(Step)
 
@@ -123,6 +127,7 @@ public:
     [[nodiscard]] int overrideServerIndex() const;
     void setOverrideServerIndex(int index);
     [[nodiscard]] bool setServerUrlForLoginFlow(const QUrl &serverUrl);
+    [[nodiscard]] bool privateCloudMode() const;
     [[nodiscard]] bool busy() const;
     [[nodiscard]] bool authPolling() const;
     [[nodiscard]] QString errorText() const;
@@ -261,6 +266,7 @@ private:
 
     friend class AccountWizardControllerTestAccess;
 
+    [[nodiscard]] bool resumePrivateCloudSetup(Folder *folder);
     void initialiseAccount();
     void ensureAccount();
     void initialiseOverrideServerChoices();
@@ -308,7 +314,13 @@ private:
 
     AccountPtr _account;
     LocalNetworkPermissionCheck _localNetworkPermissionCheck;
+    bool _privateCloudMode = false;
+    bool _cancelled = false;
+    std::function<QString(const QString &)> _privateCloudAvailabilityCheck;
+    std::function<QString(const QString &)> _localSyncFolderDialog;
+    QPointer<Folder> _privateCloudFolder;
     std::unique_ptr<Flow2Auth> _flow2Auth;
+    std::unique_ptr<PrivateCloudAuthentication> _privateCloudAuthentication;
     QPointer<SelectiveSyncDialog> _selectiveSyncDialog;
     enum class ProxyAuthentication {
         AuthenticationRequired,

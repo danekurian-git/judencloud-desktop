@@ -285,6 +285,17 @@ AdvancedSettings::AdvancedSettings(QWidget *parent)
 
     loadMiscSettings();
 
+    for (auto row : {_ui->newFolderLimitRow, _ui->existingFolderLimitRow, _ui->stopExistingFolderNowBigSyncRow, _ui->newExternalStorageRow}) {
+        for (auto index = 0; index < row->count(); ++index) {
+            if (auto widget = row->itemAt(index)->widget()) {
+                widget->hide();
+            }
+        }
+    }
+    _ui->existingFolderLimitSeparator->hide();
+    _ui->stopExistingFolderNowBigSyncSeparator->hide();
+    _ui->remotePollIntervalSeparator->hide();
+
     // accountAdded means the wizard was finished and the wizard might change some options.
     connect(AccountManager::instance(), &AccountManager::accountAdded, this, &AdvancedSettings::loadMiscSettings);
     connect(AccountManager::instance(), &AccountManager::accountAdded, this, &AdvancedSettings::updatePollIntervalVisibility);

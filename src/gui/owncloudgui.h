@@ -58,6 +58,7 @@ public:
     void createTray();
 
     void hideAndShowTray();
+    void setPrivateCloudStatus(const QString &status);
 
 Q_SIGNALS:
     void setupProxy();

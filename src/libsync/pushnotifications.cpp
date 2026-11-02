@@ -6,6 +6,7 @@
 #include "pushnotifications.h"
 #include "creds/abstractcredentials.h"
 #include "account.h"
+#include "privatecloudtransport.h"
 
 #include <QJsonArray>
 
@@ -30,6 +31,14 @@ PushNotifications::PushNotifications(Account *account, QObject *parent)
     connect(_webSocket, &QWebSocket::connected, this, &PushNotifications::onWebSocketConnected);
     connect(_webSocket, &QWebSocket::disconnected, this, &PushNotifications::onWebSocketDisconnected);
     connect(_webSocket, &QWebSocket::pong, this, &PushNotifications::onWebSocketPongReceived);
+
+    connect(PrivateCloudTransport::instance(), &PrivateCloudTransport::configurationChanged, this, [this] {
+        if (PrivateCloudTransport::isRequired()) {
+            _webSocket->abort();
+            closeWebSocket();
+            Q_EMIT connectionLost();
+        }
+    });
 
     connect(&_pingTimer, &QTimer::timeout, this, &PushNotifications::pingWebSocketServer);
     _pingTimer.setSingleShot(true);
@@ -173,6 +182,16 @@ void PushNotifications::openWebSocket()
     qCInfo(lcPushNotifications) << "Open connection to websocket on" << webSocketUrl << "for account" << _account->displayName() << _account->url();
     connect(_webSocket, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::errorOccurred), this, &PushNotifications::onWebSocketError);
     connect(_webSocket, &QWebSocket::sslErrors, this, &PushNotifications::onWebSocketSslErrors);
+    if (PrivateCloudTransport::isRequired()) {
+        const auto relayProxy = PrivateCloudTransport::proxy();
+        if (relayProxy.type() != QNetworkProxy::HttpProxy || !PrivateCloudTransport::allowsWebSocket(webSocketUrl)) {
+            QTimer::singleShot(0, this, [this] {
+                Q_EMIT connectionLost();
+            });
+            return;
+        }
+        _webSocket->setProxy(relayProxy);
+    }
     _webSocket->open(webSocketUrl);
 }
 

@@ -80,6 +80,13 @@ void ProcessDirectoryJob::start()
 
     _discoveryData->_noCaseConflictRecordsInDb = _discoveryData->_statedb->caseClashConflictRecordPaths().isEmpty();
 
+    // Mount classification can change without an etag change. Refresh mounted roots,
+    // including records created before the mount-type property was stored.
+    if (_queryServer == ParentNotChanged && _dirItem
+        && (_dirItem->_remotePerm.hasPermission(RemotePermissions::IsMounted) || _dirItem->_remotePerm.hasPermission(RemotePermissions::IsMountedSub))) {
+        _queryServer = NormalQuery;
+    }
+
     if (_queryServer == NormalQuery) {
         _serverJob = startAsyncServerQuery();
     } else {
@@ -110,6 +117,21 @@ void ProcessDirectoryJob::start()
 void ProcessDirectoryJob::process()
 {
     ASSERT(_localQueryDone && _serverQueryDone);
+
+    if (_rootPermissions.hasPermission(RemotePermissions::IsExternalStorage)) {
+        _childIgnored = true;
+        if (_dirItem) {
+            _dirItem->_instruction = CSYNC_INSTRUCTION_IGNORE;
+            _dirItem->_direction = SyncFileItem::None;
+            _dirItem->_status = SyncFileItem::FileIgnored;
+            _dirItem->_errorString = tr("Synchronization of external server storage is disabled.");
+            _discoveryData->_statedb->schedulePathForRemoteDiscovery(_currentFolder._original);
+            QTimer::singleShot(0, _discoveryData, &DiscoveryPhase::scheduleMoreJobs);
+        } else {
+            Q_EMIT _discoveryData->fatalError(tr("Synchronization of external server storage is disabled."), ErrorCategory::GenericError);
+        }
+        return;
+    }
 
     // Build lookup tables for local, remote and db entries.
     // For suffix-virtual files, the key will normally be the base file name
@@ -228,6 +250,24 @@ void ProcessDirectoryJob::process()
 
         if (isEncryptedFolderButE2eIsNotSetup) {
             checkAndUpdateSelectiveSyncListsForE2eeFolders(path._server + "/");
+        }
+
+        const auto remotePermissions = e.serverEntry.isValid() ? e.serverEntry.remotePerm : e.dbEntry._remotePerm;
+        if (remotePermissions.hasPermission(RemotePermissions::IsExternalStorage)) {
+            auto item = SyncFileItem::fromSyncJournalFileRecord(e.dbEntry);
+            item->_file = path._target;
+            item->_originalFile = path._original;
+            item->_type = e.serverEntry.isDirectory || e.localEntry.isDirectory || e.dbEntry.isDirectory() ? ItemTypeDirectory : ItemTypeFile;
+            item->_remotePerm = remotePermissions;
+            item->_instruction = CSYNC_INSTRUCTION_IGNORE;
+            item->_direction = SyncFileItem::None;
+            item->_status = SyncFileItem::FileIgnored;
+            item->_errorString = tr("Synchronization of external server storage is disabled.");
+            _childIgnored = true;
+            // Keep existing records and local data, and refresh the classification on the next sync.
+            _discoveryData->_statedb->schedulePathForRemoteDiscovery(path._original);
+            Q_EMIT _discoveryData->itemDiscovered(item);
+            continue;
         }
 
         const auto isBlacklisted = _queryServer == InBlackList || _discoveryData->isInSelectiveSyncBlackList(path._original) || isEncryptedFolderButE2eIsNotSetup;

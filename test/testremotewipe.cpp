@@ -1,7 +1,7 @@
 /*
  * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: CC0-1.0
- * 
+ *
  * This software is in the public domain, furnished "as is", without technical
  * support, and with no warranty, express or implied, as to its usefulness for
  * any purpose.
@@ -25,9 +25,33 @@
 
 using namespace OCC;
 
-class TestRemoteWipe: public QObject
+class TestRemoteWipe : public QObject
 {
     Q_OBJECT
+
+    QTemporaryDir _configDir;
+
+    AccountState *addTestAccount(const QString &user = QStringLiteral("remote-wipe-test-user"))
+    {
+        const auto account = Account::create();
+        account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl());
+        auto *credentials = new FakeCredentials(new FakeQNAM({}));
+        credentials->setUserName(user);
+        account->setCredentials(credentials);
+        account->setDavUser(user);
+        return AccountManager::instance()->addAccount(account);
+    }
+
+    std::unique_ptr<RemoteWipe> createCheck(const AccountPtr &account)
+    {
+        auto wipe = std::make_unique<RemoteWipe>(account);
+        QObject::disconnect(wipe.get(), &RemoteWipe::authorized, nullptr, nullptr);
+        wipe->_canWipeLocalFiles = true;
+        wipe->_networkManager->deleteLater();
+        wipe->_networkManager = new FakeQNAM({});
+        wipe->_networkManager->setParent(wipe.get());
+        return wipe;
+    }
 
 private Q_SLOTS:
     void initTestCase()
@@ -36,13 +60,246 @@ private Q_SLOTS:
         OCC::Logger::instance()->setLogDebug(true);
 
         QStandardPaths::setTestModeEnabled(true);
+        QVERIFY(_configDir.isValid());
+        ConfigFile::setConfDir(_configDir.path());
+    }
+
+    void cleanup()
+    {
+        const auto accounts = AccountManager::instance()->accounts();
+        for (const auto &state : accounts) {
+            AccountManager::instance()->removeAccountState(state.data());
+        }
+    }
+
+    void testStrictAuthorization_data()
+    {
+        QTest::addColumn<int>("status");
+        QTest::addColumn<QByteArray>("body");
+        QTest::addColumn<int>("error");
+        QTest::addColumn<bool>("authorized");
+        QTest::newRow("true") << 200 << QByteArrayLiteral("{\"wipe\":true}") << 0 << true;
+        QTest::newRow("false") << 200 << QByteArrayLiteral("{\"wipe\":false}") << 0 << false;
+        QTest::newRow("missing") << 200 << QByteArrayLiteral("{}") << 0 << false;
+        QTest::newRow("string") << 200 << QByteArrayLiteral("{\"wipe\":\"true\"}") << 0 << false;
+        QTest::newRow("number") << 200 << QByteArrayLiteral("{\"wipe\":1}") << 0 << false;
+        QTest::newRow("array") << 200 << QByteArrayLiteral("[{\"wipe\":true}]") << 0 << false;
+        QTest::newRow("malformed") << 200 << QByteArrayLiteral("{\"wipe\":true") << 0 << false;
+        QTest::newRow("created-is-not-authorization") << 201 << QByteArrayLiteral("{\"wipe\":true}") << 0 << false;
+        QTest::newRow("redirect") << 302 << QByteArrayLiteral("{\"wipe\":true}") << 0 << false;
+        QTest::newRow("revoked") << 401 << QByteArrayLiteral("{\"wipe\":true}") << 0 << false;
+        QTest::newRow("forbidden") << 403 << QByteArrayLiteral("{\"wipe\":true}") << 0 << false;
+        QTest::newRow("not-found") << 404 << QByteArrayLiteral("{\"wipe\":true}") << 0 << false;
+        QTest::newRow("server-error") << 500 << QByteArrayLiteral("{\"wipe\":true}") << 0 << false;
+        QTest::newRow("tls-error") << 200 << QByteArrayLiteral("{\"wipe\":true}") << int(QNetworkReply::SslHandshakeFailedError) << false;
+    }
+
+    void testStrictAuthorization()
+    {
+        QFETCH(int, status);
+        QFETCH(QByteArray, body);
+        QFETCH(int, error);
+        QFETCH(bool, authorized);
+        auto *state = addTestAccount();
+        auto wipe = createCheck(state->account());
+        auto requests = 0;
+        auto sentBody = QByteArray{};
+        auto redirectPolicy = QVariant{};
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *device) -> QNetworkReply * {
+            ++requests;
+            sentBody = device->readAll();
+            redirectPolicy = request.attribute(QNetworkRequest::RedirectPolicyAttribute);
+            auto *reply = new FakeErrorReply(op, request, wipe.get(), status, body);
+            reply->setError(QNetworkReply::NetworkError(error), QString{});
+            return reply;
+        });
+        auto authorizedSpy = QSignalSpy(wipe.get(), &RemoteWipe::authorized);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("test&token=+%"));
+        wipe->startCheckJobWithAppPassword(QStringLiteral("duplicate"));
+        QTRY_VERIFY(!wipe->_networkReplyCheck);
+        QCOMPARE(requests, 1);
+        QCOMPARE(sentBody, QByteArrayLiteral("token=[REDACTED_SECRET]"));
+        QCOMPARE(redirectPolicy.toInt(), int(QNetworkRequest::ManualRedirectPolicy));
+        QCOMPARE(authorizedSpy.count(), authorized ? 1 : 0);
+        if (authorized) {
+            QCOMPARE(qvariant_cast<AccountState *>(authorizedSpy.at(0).at(0)), state);
+            wipe->startCheckJobWithAppPassword(QStringLiteral("duplicate-after-authorization"));
+            QCOMPARE(requests, 1);
+        }
+    }
+
+    void testAuthorizationUsesAccountIdentity()
+    {
+        auto *first = addTestAccount();
+        auto *second = addTestAccount();
+        QCOMPARE(first->account()->displayName(), second->account()->displayName());
+        auto wipe = createCheck(second->account());
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument::fromJson(R"({"wipe":true})"));
+        });
+        auto authorizedSpy = QSignalSpy(wipe.get(), &RemoteWipe::authorized);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        QTRY_COMPARE(authorizedSpy.count(), 1);
+        QCOMPARE(qvariant_cast<AccountState *>(authorizedSpy.at(0).at(0)), second);
+    }
+
+    void testRemovedOrChangedAccountCannotWipe_data()
+    {
+        QTest::addColumn<bool>("removeAccount");
+        QTest::newRow("removed") << true;
+        QTest::newRow("changed-user") << false;
+    }
+
+    void testRemovedOrChangedAccountCannotWipe()
+    {
+        QFETCH(bool, removeAccount);
+        auto *state = addTestAccount();
+        const auto account = state->account();
+        auto wipe = createCheck(account);
+        auto replyGuard = QPointer<QNetworkReply>{};
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            auto *reply = new DelayedReply<FakeJsonReply>(30, op, request, wipe.get(), 200, QJsonDocument::fromJson(R"({"wipe":true})"));
+            replyGuard = reply;
+            return reply;
+        });
+        auto authorizedSpy = QSignalSpy(wipe.get(), &RemoteWipe::authorized);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        if (removeAccount) {
+            AccountManager::instance()->removeAccountState(state);
+        } else {
+            account->setDavUser(QStringLiteral("changed-user"));
+        }
+        QTRY_VERIFY(!replyGuard);
+        QCOMPARE(authorizedSpy.count(), 0);
+    }
+
+    void testCheckDeadlineAllowsRetry()
+    {
+        auto *state = addTestAccount();
+        auto wipe = createCheck(state->account());
+        wipe->_checkDeadline.setInterval(10);
+        auto requests = 0;
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            ++requests;
+            return new FakeHangingReply(op, request, wipe.get());
+        });
+        auto authorizedSpy = QSignalSpy(wipe.get(), &RemoteWipe::authorized);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        QTRY_VERIFY(!wipe->_networkReplyCheck);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        QCOMPARE(requests, 2);
+        QTRY_VERIFY(!wipe->_networkReplyCheck);
+        QCOMPARE(authorizedSpy.count(), 0);
+    }
+
+    void testFailedWipeAndShutdownNeverAcknowledge()
+    {
+        auto *state = addTestAccount();
+        auto wipe = createCheck(state->account());
+        auto requests = 0;
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            ++requests;
+            return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument::fromJson(R"({"wipe":true})"));
+        });
+        auto authorizedSpy = QSignalSpy(wipe.get(), &RemoteWipe::authorized);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        QTRY_COMPARE(authorizedSpy.count(), 1);
+        wipe->slotWipeDone(state, false);
+        wipe->notifyServerSuccess();
+        QCOMPARE(requests, 1);
+        AccountManager::instance()->shutdown();
+        QCoreApplication::processEvents();
+        QCOMPARE(requests, 1);
+        QVERIFY(!wipe->_wipeCompleted);
+    }
+
+    void testSuccessfulWipeAcknowledgedOnce()
+    {
+        auto *state = addTestAccount();
+        auto wipe = createCheck(state->account());
+        auto checks = 0;
+        auto acknowledgments = 0;
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *body) -> QNetworkReply * {
+            if (request.url().path().endsWith(QStringLiteral("/check"))) {
+                ++checks;
+                return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument::fromJson(R"({"wipe":true})"));
+            }
+            ++acknowledgments;
+            if (body->readAll() != QByteArrayLiteral("token=[REDACTED_SECRET]")) {
+                return new FakeErrorReply(op, request, wipe.get(), 400);
+            }
+            return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument(QJsonObject{}));
+        });
+        auto authorizedSpy = QSignalSpy(wipe.get(), &RemoteWipe::authorized);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        QTRY_COMPARE(authorizedSpy.count(), 1);
+        wipe->slotWipeDone(state, true);
+        QTRY_VERIFY(wipe->_acknowledged);
+        wipe->notifyServerSuccess();
+        QCOMPARE(checks, 1);
+        QCOMPARE(acknowledgments, 1);
+        QVERIFY(AccountManager::instance()->accounts().isEmpty());
+        QVERIFY(wipe->_appPassword.isEmpty());
+    }
+
+    void testAcknowledgmentFailureCanRetry_data()
+    {
+        QTest::addColumn<bool>("timeout");
+        QTest::newRow("http-failure") << false;
+        QTest::newRow("deadline") << true;
+    }
+
+    void testAcknowledgmentFailureCanRetry()
+    {
+        QFETCH(bool, timeout);
+        auto *state = addTestAccount();
+        auto wipe = createCheck(state->account());
+        wipe->_successDeadline.setInterval(10);
+        auto acknowledgments = 0;
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            if (request.url().path().endsWith(QStringLiteral("/check"))) {
+                return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument::fromJson(R"({"wipe":true})"));
+            }
+            ++acknowledgments;
+            if (acknowledgments == 1) {
+                if (timeout) {
+                    return new FakeHangingReply(op, request, wipe.get());
+                }
+                return new FakeErrorReply(op, request, wipe.get(), 503);
+            }
+            return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument(QJsonObject{}));
+        });
+        auto authorizedSpy = QSignalSpy(wipe.get(), &RemoteWipe::authorized);
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        QTRY_COMPARE(authorizedSpy.count(), 1);
+        wipe->slotWipeDone(state, true);
+        QTRY_VERIFY(!wipe->_networkReplySuccess);
+        QVERIFY(!wipe->_acknowledged);
+        QVERIFY(!wipe->_appPassword.isEmpty());
+        wipe->notifyServerSuccess();
+        QTRY_VERIFY(wipe->_acknowledged);
+        QCOMPARE(acknowledgments, 2);
+    }
+
+    void testDestroyDuringCheck()
+    {
+        auto *state = addTestAccount();
+        auto wipe = createCheck(state->account());
+        auto replyGuard = QPointer<QNetworkReply>{};
+        static_cast<FakeQNAM *>(wipe->_networkManager)->setOverride([&](auto op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            auto *reply = new FakeHangingReply(op, request, wipe->_networkManager);
+            replyGuard = reply;
+            return reply;
+        });
+        wipe->startCheckJobWithAppPassword(QStringLiteral("synthetic-token"));
+        QVERIFY(replyGuard);
+        wipe.reset();
+        QVERIFY(!replyGuard);
+        QCOMPARE(AccountManager::instance()->accounts().size(), 1);
     }
 
     void testRemoteWipe()
     {
-        auto dir = QTemporaryDir {};
-        ConfigFile::setConfDir(dir.path()); // we don't want to pollute the user's config file
-
         // RemoteWipe needs FolderMan for actually wiping local data
         auto folderMan = FolderMan::instance();
         QVERIFY(folderMan);
@@ -63,7 +320,7 @@ private Q_SLOTS:
         FolderMan::instance()->addFolder(accountState, folderDefinition(fakeFolder.localPath()));
 
         bool revokeAppPassword = false; // whether respond with 401 to requests
-        bool doWipe = false;            // whether a remote wipe should be done
+        bool doWipe = false; // whether a remote wipe should be done
 
         const auto fakeQnamOverride = [&](const QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *device) -> QNetworkReply * {
             Q_UNUSED(device)

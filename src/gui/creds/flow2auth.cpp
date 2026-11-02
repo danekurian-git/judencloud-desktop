@@ -202,10 +202,20 @@ void Flow2Auth::slotPollTimerTimeout()
 
         _pollTimer.stop();
 
+        if (!_account->setUrl(serverUrl)) {
+            appPassword.clear();
+            loginName.clear();
+            _loginUrl.clear();
+            _pollToken.clear();
+            _pollEndpoint.clear();
+            _isBusy = false;
+            _hasToken = false;
+            Q_EMIT result(Error, tr("The login response returned a server that is not allowed by this client."));
+            return;
+        }
+
         // Success
         qCInfo(lcFlow2auth) << "Success getting the appPassword for user: " << loginName << ", server: " << serverUrl.toString();
-
-        _account->setUrl(serverUrl);
 
         Q_EMIT result(LoggedIn, QString(), loginName, appPassword);
 

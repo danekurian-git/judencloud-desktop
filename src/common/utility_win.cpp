@@ -9,23 +9,25 @@
 #include "gui/configgui.h"
 #include "config.h"
 
-#include <comdef.h>
 #include <Lmcons.h>
-#include <psapi.h>
-#include <RestartManager.h>
-#include <shlguid.h>
-#include <shlobj.h>
-#include <string>
-#include <winbase.h>
-#include <windows.h>
-#include <winerror.h>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QLibrary>
 #include <QSettings>
 #include <QTemporaryFile>
-#include <QFileInfo>
+#include <RestartManager.h>
+#include <comdef.h>
+#include <psapi.h>
+#include <shlguid.h>
+#include <shlobj.h>
+#include <string>
+#include <vector>
+#include <winbase.h>
+#include <windows.h>
+#include <winerror.h>
+#include <winioctl.h>
 
 extern Q_CORE_EXPORT int qt_ntfs_permission_lookup;
 
@@ -33,6 +35,94 @@ static const char systemRunPathC[] = R"(HKEY_LOCAL_MACHINE\Software\Microsoft\Wi
 static const char runPathC[] = R"(HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run)";
 
 namespace OCC {
+
+OCSYNC_EXPORT std::function<Utility::LocalStorageType(const QString &)> localStorageTypeOverride;
+
+OCSYNC_EXPORT Utility::LocalStorageType
+classifyLocalStorage(const UINT driveType, const STORAGE_BUS_TYPE busType, const bool removableMedia, const bool hotplugDevice)
+{
+    if (driveType == DRIVE_REMOTE) {
+        return Utility::LocalStorageType::Network;
+    }
+    if (driveType == DRIVE_REMOVABLE || driveType == DRIVE_CDROM || removableMedia || hotplugDevice || busType == BusTypeUsb || busType == BusTypeSd
+        || busType == BusTypeMmc || busType == BusType1394) {
+        return Utility::LocalStorageType::External;
+    }
+    if (driveType == DRIVE_RAMDISK || (driveType == DRIVE_FIXED && busType != BusTypeUnknown)) {
+        return Utility::LocalStorageType::Internal;
+    }
+    return Utility::LocalStorageType::Unknown;
+}
+
+Utility::LocalStorageType Utility::localStorageType(const QString &path)
+{
+    if (localStorageTypeOverride) {
+        return localStorageTypeOverride(path);
+    }
+    if (path.isEmpty()) {
+        return LocalStorageType::Unknown;
+    }
+
+    // GetVolumePathName follows junctions and mounted folders, including existing ancestors of new paths.
+    const auto nativePath = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
+    constexpr auto maximumWindowsPathLength = 32768;
+    auto volumePath = std::vector<wchar_t>(maximumWindowsPathLength);
+    if (!GetVolumePathNameW(reinterpret_cast<LPCWSTR>(nativePath.utf16()), volumePath.data(), static_cast<DWORD>(volumePath.size()))) {
+        return LocalStorageType::Unknown;
+    }
+    const auto driveType = GetDriveTypeW(volumePath.data());
+    if (driveType != DRIVE_FIXED) {
+        return classifyLocalStorage(driveType, BusTypeUnknown, false, false);
+    }
+
+    auto volumeName = std::vector<wchar_t>(maximumWindowsPathLength);
+    if (!GetVolumeNameForVolumeMountPointW(volumePath.data(), volumeName.data(), static_cast<DWORD>(volumeName.size()))) {
+        return LocalStorageType::Unknown;
+    }
+    auto devicePath = QString::fromWCharArray(volumeName.data());
+    if (devicePath.endsWith(QLatin1Char('\\'))) {
+        devicePath.chop(1);
+    }
+    const Handle device(CreateFileW(reinterpret_cast<LPCWSTR>(devicePath.utf16()),
+                                    0,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr,
+                                    OPEN_EXISTING,
+                                    0,
+                                    nullptr));
+    if (!device) {
+        return LocalStorageType::Unknown;
+    }
+
+    auto query = STORAGE_PROPERTY_QUERY{};
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+    auto header = STORAGE_DESCRIPTOR_HEADER{};
+    auto bytesReturned = DWORD{};
+    constexpr auto maximumDescriptorSize = 64 * 1024;
+    if (!DeviceIoControl(device, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &header, sizeof(header), &bytesReturned, nullptr)
+        || bytesReturned < sizeof(header) || header.Size < sizeof(STORAGE_DEVICE_DESCRIPTOR) || header.Size > maximumDescriptorSize) {
+        return LocalStorageType::Unknown;
+    }
+    auto buffer = std::vector<char>(header.Size);
+    if (!DeviceIoControl(device, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), buffer.data(), static_cast<DWORD>(buffer.size()), &bytesReturned, nullptr)
+        || bytesReturned < sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+        return LocalStorageType::Unknown;
+    }
+    const auto descriptor = reinterpret_cast<const STORAGE_DEVICE_DESCRIPTOR *>(buffer.data());
+    const auto type = classifyLocalStorage(driveType, descriptor->BusType, descriptor->RemovableMedia, false);
+    if (type == LocalStorageType::External) {
+        return type;
+    }
+
+    auto hotplug = STORAGE_HOTPLUG_INFO{};
+    hotplug.Size = sizeof(hotplug);
+    if (!DeviceIoControl(device, IOCTL_STORAGE_GET_HOTPLUG_INFO, nullptr, 0, &hotplug, sizeof(hotplug), &bytesReturned, nullptr)
+        || bytesReturned < sizeof(hotplug)) {
+        return LocalStorageType::Unknown;
+    }
+    return classifyLocalStorage(driveType, descriptor->BusType, descriptor->RemovableMedia || hotplug.MediaRemovable, hotplug.DeviceHotplug);
+}
 
 QVector<Utility::ProcessInfosForOpenFile> Utility::queryProcessInfosKeepingFileOpen(const QString &filePath)
 {
@@ -209,7 +299,7 @@ void Utility::migrateFavLink(const QString &folder)
 {
     const QDir folderDir(QDir::fromNativeSeparators(folder));
     const auto oldDirName = folderDir.dirName();
-    const auto folderDisplayName = syncFolderDisplayName(oldDirName, QStringLiteral(APPLICATION_NAME));
+    const auto folderDisplayName = syncFolderDisplayName(oldDirName, QStringLiteral(APPLICATION_DISPLAY_NAME));
     // overwrite Desktop.ini, update icon, update folder display name
     setupDesktopIni(folder, folderDisplayName);
 
@@ -260,7 +350,7 @@ void Utility::removeFavLink(const QString &folder)
     const QDir links(QString::fromWCharArray(path));
     CoTaskMemFree(path);
 
-    const auto folderDisplayName = syncFolderDisplayName(folderDir.dirName(), QStringLiteral(APPLICATION_NAME));
+    const auto folderDisplayName = syncFolderDisplayName(folderDir.dirName(), QStringLiteral(APPLICATION_DISPLAY_NAME));
     const auto linkName = QDir(links).absoluteFilePath(folderDisplayName + QLatin1String(".lnk"));
 
     qCDebug(lcUtility) << "Removing favorite link from" << folder << "to" << linkName;

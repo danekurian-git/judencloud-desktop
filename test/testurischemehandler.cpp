@@ -12,6 +12,8 @@
 #include "configfile.h"
 #include "theme.h"
 #include "urischemehandler.h"
+#include "account.h"
+#include "config.h"
 
 using namespace OCC;
 
@@ -25,6 +27,22 @@ private Q_SLOTS:
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
+    }
+
+    void parseUriHonoursCompiledServerRestriction()
+    {
+        const auto enforcedUrl = Account::enforcedServerUrl();
+        if (enforcedUrl.isEmpty()) {
+            QSKIP("This test requires a compiled server restriction.");
+        }
+        const auto prefix = QStringLiteral(APPLICATION_URI_HANDLER_SCHEME "://login/server:");
+        const auto accepted = UriSchemeHandler::parseUri(QUrl(prefix + enforcedUrl.toString()));
+        QCOMPARE(accepted.action, UriSchemeHandler::Action::Login);
+        QCOMPARE(accepted.serverUrl, enforcedUrl);
+
+        const auto rejected = UriSchemeHandler::parseUri(QUrl(prefix + QStringLiteral("https://unconfigured.example.com")));
+        QCOMPARE(rejected.action, UriSchemeHandler::Action::Invalid);
+        QVERIFY(!rejected.error.isEmpty());
     }
 
     void parseUri_data()

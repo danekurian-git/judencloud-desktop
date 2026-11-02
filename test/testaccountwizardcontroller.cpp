@@ -4,24 +4,49 @@
  */
 
 #include "account.h"
+#include "common/vfs.h"
 #include "configfile.h"
+#include "creds/privatecloudcredentialsdialog.h"
+#include "creds/webflowcredentials.h"
+#include "gui/folder.h"
 #include "gui/localnetworkpermission.h"
+#include "gui/tray/svgimageprovider.h"
+#include "gui/tray/usermodel.h"
 #include "gui/wizard/accountwizardcontroller.h"
+#include "privateclouddrive.h"
+#include "syncenginetestutils.h"
+#include "testhelper.h"
 #include "theme.h"
 
 #ifdef BUILD_FILE_PROVIDER_MODULE
 #include "gui/macOS/fileprovider.h"
 #endif
 
+#include <QDialog>
+#include <QDir>
+#include <QEvent>
+#include <QFile>
+#include <QFontDatabase>
+#include <QImage>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QQmlApplicationEngine>
+#include <QQmlComponent>
+#include <QQuickItem>
+#include <QQuickWindow>
 #include <QScopeGuard>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUuid>
 
 using namespace OCC;
 
-namespace OCC {
+namespace OCC
+{
 
 class AccountWizardControllerTestAccess
 {
@@ -38,6 +63,76 @@ public:
         controller._account = Account::create();
         controller._account->setUrl(url);
     }
+
+    static void preparePrivateCloud(AccountWizardController &controller, std::function<QString(const QString &)> availabilityCheck)
+    {
+        controller._privateCloudMode = true;
+        controller._syncMode = AccountWizardController::VirtualFiles;
+        controller._privateCloudAvailabilityCheck = std::move(availabilityCheck);
+        const auto url = Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl();
+        setAccountUrl(controller, url);
+        controller._account->setDavUser(QStringLiteral("alice"));
+    }
+
+    static void completeAuthentication(AccountWizardController &controller)
+    {
+        controller.completeAuthentication();
+    }
+
+    static QString remoteFolder(const AccountWizardController &controller)
+    {
+        return controller._remoteFolder;
+    }
+
+    static QString privateCloudIdentity(const AccountWizardController &controller)
+    {
+        return controller._account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + controller._account->davUser();
+    }
+
+    static bool resumePrivateCloudSetup(AccountWizardController &controller, Folder *folder)
+    {
+        return controller.resumePrivateCloudSetup(folder);
+    }
+
+    static void showPrivateCloudSignIn(AccountWizardController &controller)
+    {
+        controller.setCurrentStep(AccountWizardController::BasicAuthStep);
+    }
+
+    static void setBusy(AccountWizardController &controller, bool busy)
+    {
+        controller.setBusy(busy);
+    }
+
+    static void clearError(AccountWizardController &controller)
+    {
+        controller.setErrorText({});
+    }
+
+    static void setFolderDialog(AccountWizardController &controller, std::function<QString(const QString &)> picker)
+    {
+        controller._localSyncFolderDialog = std::move(picker);
+    }
+
+    static void setLocalFolder(AccountWizardController &controller, const QString &path)
+    {
+        controller.setLocalSyncFolder(path);
+    }
+
+    static void showDriveSetup(AccountWizardController &controller)
+    {
+        controller.setCurrentStep(AccountWizardController::DriveSetupStep);
+    }
+
+    static void completeRemoteFolderCheck(AccountWizardController &controller)
+    {
+        controller.completeRemoteFolderCheck();
+    }
+
+    static void setNetworkManager(AccountWizardController &controller, QNetworkAccessManager *manager)
+    {
+        controller._account->setCredentials(new FakeCredentials(manager));
+    }
 };
 
 }
@@ -46,10 +141,546 @@ class TestAccountWizardController : public QObject
 {
     Q_OBJECT
 
+    QTemporaryDir _configuration;
+
 private Q_SLOTS:
     void initTestCase()
     {
         QStandardPaths::setTestModeEnabled(true);
+        QVERIFY(_configuration.isValid());
+        ConfigFile::setConfDir(_configuration.path());
+        Q_INIT_RESOURCE(resources);
+        Q_INIT_RESOURCE(theme);
+        qmlRegisterSingletonType<UserModel>("com.nextcloud.desktopclient", 1, 0, "UserModel", [](QQmlEngine *, QJSEngine *) -> QObject * {
+            auto *model = UserModel::instance();
+            QQmlEngine::setObjectOwnership(model, QQmlEngine::CppOwnership);
+            return model;
+        });
+        qmlRegisterSingletonType<Theme>("com.nextcloud.desktopclient", 1, 0, "Theme", [](QQmlEngine *, QJSEngine *) -> QObject * {
+            auto *theme = Theme::instance();
+            QQmlEngine::setObjectOwnership(theme, QQmlEngine::CppOwnership);
+            return theme;
+        });
+        qmlRegisterType<AccountWizardController>("com.nextcloud.desktopclient", 1, 0, "AccountWizardController");
+    }
+
+    void privateCloudSignInShowsExplicitUsernameAndPassword()
+    {
+#ifdef Q_OS_WIN
+        if (!qEnvironmentVariable("PRIVATECLOUD_SIGNIN_SCREENSHOT").isEmpty()) {
+            QFontDatabase::addApplicationFont(QDir(qEnvironmentVariable("SystemRoot")).filePath(QStringLiteral("Fonts/segoeui.ttf")));
+            QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+        }
+#endif
+        AccountWizardController controller;
+        if (PrivateCloudDrive::isEnabled()) {
+            QCOMPARE(controller.currentStep(), AccountWizardController::BasicAuthStep);
+        }
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [](const QString &) {
+            return QStringLiteral("unused");
+        });
+        AccountWizardControllerTestAccess::showPrivateCloudSignIn(controller);
+        QVERIFY(controller.basicAuthUser().isEmpty());
+        QVERIFY(controller.basicAuthPassword().isEmpty());
+        QVERIFY(!controller.basicAuthValid());
+        QVERIFY(!controller.startLoginFlowAutomatically());
+        QCOMPARE(controller.appName(), QStringLiteral("privateCloud"));
+        QQmlApplicationEngine engine;
+        engine.addImportPath(QStringLiteral("qrc:/qml/theme"));
+        engine.addImageProvider(QStringLiteral("svgimage-custom-color"), new Ui::SvgImageProvider);
+        QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/qml/src/gui/wizard/qml/AccountWizardWindow.qml")));
+        const auto object = std::unique_ptr<QObject>(component.createWithInitialProperties({{QStringLiteral("controller"), QVariant::fromValue(&controller)}}));
+        QVERIFY2(object, qPrintable(component.errorString()));
+        const auto username = object->findChild<QObject *>(QStringLiteral("privateCloudUsername"));
+        const auto password = object->findChild<QObject *>(QStringLiteral("privateCloudPassword"));
+        QVERIFY(username);
+        QVERIFY(password);
+        QVERIFY(username->property("text").toString().isEmpty());
+        QVERIFY(password->property("text").toString().isEmpty());
+        controller.setBasicAuthUser(QStringLiteral("explicit-user"));
+        QVERIFY(!controller.basicAuthValid());
+        QCOMPARE(username->property("text").toString(), QStringLiteral("explicit-user"));
+        const auto window = qobject_cast<QQuickWindow *>(object.get());
+        QVERIFY(window);
+        QCOMPARE(window->title(), QStringLiteral("privateCloud"));
+        window->show();
+        QTRY_VERIFY(window->isExposed());
+        const auto usernameItem = qobject_cast<QQuickItem *>(username);
+        const auto passwordItem = qobject_cast<QQuickItem *>(password);
+        QVERIFY(usernameItem);
+        QVERIFY(passwordItem);
+        usernameItem->forceActiveFocus();
+        QTRY_VERIFY(usernameItem->hasActiveFocus());
+        QTest::keyClick(window, Qt::Key_Return);
+        QTRY_VERIFY(passwordItem->hasActiveFocus());
+        QVERIFY(controller.errorText().isEmpty());
+        QVERIFY(!controller.busy());
+        QTest::keyClick(window, Qt::Key_Return);
+        QCOMPARE(controller.errorText(), QStringLiteral("Enter both your username and password."));
+        QVERIFY(!controller.busy());
+
+        const auto showPassword = object->findChild<QQuickItem *>(QStringLiteral("privateCloudShowPassword"));
+        const auto helpToggle = object->findChild<QQuickItem *>(QStringLiteral("privateCloudPasswordHelpToggle"));
+        const auto help = object->findChild<QQuickItem *>(QStringLiteral("privateCloudPasswordHelp"));
+        QVERIFY(showPassword);
+        QVERIFY(helpToggle);
+        QVERIFY(help);
+        const auto click = [window](QQuickItem *item) {
+            QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
+        };
+        controller.setBasicAuthPassword(QStringLiteral("test-password"));
+        QVERIFY(controller.basicAuthValid());
+        QCOMPARE(password->property("echoMode").toInt(), static_cast<int>(QLineEdit::Password));
+        click(showPassword);
+        QTRY_COMPARE(password->property("echoMode").toInt(), static_cast<int>(QLineEdit::Normal));
+        QCOMPARE(password->property("text").toString(), QStringLiteral("test-password"));
+        click(showPassword);
+        QTRY_COMPARE(password->property("echoMode").toInt(), static_cast<int>(QLineEdit::Password));
+        QVERIFY(!help->isVisible());
+        click(helpToggle);
+        QTRY_VERIFY(help->isVisible());
+        QVERIFY(help->property("text").toString().contains(QStringLiteral("app password")));
+        click(helpToggle);
+        QTRY_VERIFY(!help->isVisible());
+        click(showPassword);
+        QTRY_VERIFY(showPassword->property("checked").toBool());
+        AccountWizardControllerTestAccess::setBusy(controller, true);
+        QTRY_COMPARE(password->property("echoMode").toInt(), static_cast<int>(QLineEdit::Password));
+        QVERIFY(!username->property("enabled").toBool());
+        QVERIFY(!password->property("enabled").toBool());
+        QVERIFY(!showPassword->isEnabled());
+        AccountWizardControllerTestAccess::setBusy(controller, false);
+        QVERIFY(showPassword->isEnabled());
+        QCOMPARE(username->property("text").toString(), QStringLiteral("explicit-user"));
+        const auto screenshotPath = qEnvironmentVariable("PRIVATECLOUD_SIGNIN_SCREENSHOT");
+        if (!screenshotPath.isEmpty()) {
+            controller.setBasicAuthPassword({});
+            AccountWizardControllerTestAccess::clearError(controller);
+            window->show();
+            QTRY_VERIFY(window->isExposed());
+            QImage screenshot;
+            QTRY_VERIFY(!(screenshot = window->grabWindow()).isNull());
+            QVERIFY(screenshot.save(screenshotPath));
+        }
+        controller.cancel();
+        QVERIFY(controller.basicAuthPassword().isEmpty());
+    }
+
+    void privateCloudReauthenticationShowsBothFields()
+    {
+        const auto account = Account::create();
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl()));
+        account->setDavUser(QStringLiteral("canonical-user"));
+        account->setCredentials(new WebFlowCredentials(QStringLiteral("stored-user"), QStringLiteral("stored-token")));
+        auto *dialog = new PrivateCloudCredentialsDialog(account.data());
+        QCOMPARE(dialog->windowTitle(), QStringLiteral("Sign in to privateCloud"));
+        const auto username = dialog->findChild<QLineEdit *>(QStringLiteral("privateCloudUsername"));
+        const auto password = dialog->findChild<QLineEdit *>(QStringLiteral("privateCloudPassword"));
+        QVERIFY(username);
+        QVERIFY(password);
+        QCOMPARE(username->text(), QStringLiteral("stored-user"));
+        QVERIFY(!username->isReadOnly());
+        QVERIFY(password->text().isEmpty());
+        QCOMPARE(password->echoMode(), QLineEdit::Password);
+        QCOMPARE(username->accessibleName(), QStringLiteral("Username"));
+        QCOMPARE(password->accessibleName(), QStringLiteral("Password"));
+        const auto showPassword = dialog->findChild<QPushButton *>(QStringLiteral("privateCloudShowPassword"));
+        const auto helpToggle = dialog->findChild<QPushButton *>(QStringLiteral("privateCloudPasswordHelpToggle"));
+        const auto help = dialog->findChild<QLabel *>(QStringLiteral("privateCloudPasswordHelp"));
+        const auto status = dialog->findChild<QLabel *>(QStringLiteral("privateCloudSignInStatus"));
+        QVERIFY(showPassword);
+        QVERIFY(helpToggle);
+        QVERIFY(help);
+        QVERIFY(status);
+        dialog->show();
+        QVERIFY(QTest::qWaitForWindowExposed(dialog));
+        username->setFocus();
+        QTest::keyClick(username, Qt::Key_Return);
+        QTRY_VERIFY(password->hasFocus());
+        QVERIFY(status->text().isEmpty());
+        QTest::keyClick(password, Qt::Key_Return);
+        QCOMPARE(status->text(), QStringLiteral("Enter both your username and password."));
+        QVERIFY(username->isEnabled());
+        password->setText(QStringLiteral("visible-test-password"));
+        QTest::mouseClick(showPassword, Qt::LeftButton);
+        QCOMPARE(password->echoMode(), QLineEdit::Normal);
+        QCOMPARE(showPassword->accessibleName(), QStringLiteral("Hide password"));
+        QCOMPARE(password->text(), QStringLiteral("visible-test-password"));
+        QTest::mouseClick(showPassword, Qt::LeftButton);
+        QCOMPARE(password->echoMode(), QLineEdit::Password);
+        QVERIFY(!help->isVisible());
+        QTest::mouseClick(helpToggle, Qt::LeftButton);
+        QVERIFY(help->isVisible());
+        QVERIFY(help->text().contains(QStringLiteral("app password")));
+        QTest::mouseClick(helpToggle, Qt::LeftButton);
+        QVERIFY(!help->isVisible());
+        QCOMPARE(username->text(), QStringLiteral("stored-user"));
+        username->setText(QStringLiteral("another-user"));
+        dialog->reject();
+        QCOMPARE(account->credentials()->user(), QStringLiteral("stored-user"));
+        QCOMPARE(account->credentials()->password(), QStringLiteral("stored-token"));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
+    void privateCloudRequiresAuthenticationAndOnlineOnlySetup()
+    {
+        AccountWizardController controller;
+        auto availabilityChecks = 0;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [&availabilityChecks](const QString &) {
+            ++availabilityChecks;
+            return QStringLiteral("Drive is occupied.");
+        });
+        QSignalSpy finishedSpy(&controller, &AccountWizardController::finished);
+
+        QVERIFY(controller.privateCloudMode());
+        QVERIFY(!controller.canUseClassicSync());
+        QVERIFY(!controller.canSkipFolderConfiguration());
+        QVERIFY(!controller.hasAdvancedOptions());
+        controller.setSyncMode(AccountWizardController::SyncEverything);
+        QCOMPARE(controller.syncMode(), AccountWizardController::VirtualFiles);
+        controller.skipFolderConfiguration();
+        controller.finish();
+        QCOMPARE(availabilityChecks, 0);
+        QCOMPARE(finishedSpy.count(), 0);
+    }
+
+    void privateCloudOffersFolderBeforeSetupAndKeepsRetryOnError()
+    {
+        ConfigFile config;
+        const auto previousOverride = config.overrideLocalDir();
+        const auto restoreOverride = qScopeGuard([&config, previousOverride] {
+            config.setOverrideLocalDir(previousOverride);
+        });
+        config.setOverrideLocalDir(QStringLiteral("C:/ignored-custom-folder"));
+
+        AccountWizardController controller;
+        auto availabilityChecks = 0;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [&availabilityChecks](const QString &) {
+            ++availabilityChecks;
+            return availabilityChecks == 1 ? QStringLiteral("Drive is occupied.") : QStringLiteral("On-demand files are unavailable.");
+        });
+        QSignalSpy finishedSpy(&controller, &AccountWizardController::finished);
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+
+        QCOMPARE(controller.currentStep(), AccountWizardController::SyncOptionsStep);
+        QCOMPARE(controller.syncMode(), AccountWizardController::VirtualFiles);
+        QCOMPARE(AccountWizardControllerTestAccess::remoteFolder(controller), QStringLiteral("/"));
+        QVERIFY(controller.needsSyncOptions());
+        QCOMPARE(controller.localSyncFolder(), QStringLiteral("C:/PPCsyncConfig"));
+        QVERIFY(controller.localSyncFolder() != config.overrideLocalDir());
+        QCoreApplication::processEvents();
+        QCOMPARE(availabilityChecks, 0);
+        QVERIFY(controller.errorText().isEmpty());
+        controller.finish();
+        QCOMPARE(availabilityChecks, 1);
+        QCOMPARE(controller.errorText(), QStringLiteral("Drive is occupied."));
+        QVERIFY(!controller.busy());
+        QCOMPARE(finishedSpy.count(), 0);
+
+        controller.goBack();
+        QCOMPARE(controller.currentStep(), AccountWizardController::SyncOptionsStep);
+        controller.finish();
+        QCOMPARE(availabilityChecks, 2);
+        QCOMPARE(controller.errorText(), QStringLiteral("On-demand files are unavailable."));
+        QCOMPARE(finishedSpy.count(), 0);
+        controller.cancel();
+        QCOMPARE(finishedSpy.count(), 1);
+        QCOMPARE(finishedSpy.constFirst().constFirst().toInt(), static_cast<int>(QDialog::Rejected));
+    }
+
+    void privateCloudCancellationStopsQueuedSetup()
+    {
+        AccountWizardController controller;
+        auto availabilityChecks = 0;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [&availabilityChecks](const QString &) {
+            ++availabilityChecks;
+            return QStringLiteral("Drive is occupied.");
+        });
+        QSignalSpy finishedSpy(&controller, &AccountWizardController::finished);
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+        controller.cancel();
+        QCoreApplication::processEvents();
+        controller.finish();
+        controller.cancel();
+        QCOMPARE(availabilityChecks, 0);
+        QCOMPARE(finishedSpy.count(), 1);
+        QCOMPARE(finishedSpy.constFirst().constFirst().toInt(), static_cast<int>(QDialog::Rejected));
+    }
+
+    void privateCloudFolderPickerKeepsSelectionAndRejectsNonemptyFolders()
+    {
+        QTemporaryDir location;
+        QVERIFY(location.isValid());
+        const auto emptyPath = location.filePath(QStringLiteral("chosen-folder"));
+        QVERIFY(QDir().mkpath(emptyPath));
+        AccountWizardController controller;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [](const QString &) {
+            return QStringLiteral("unused");
+        });
+        auto selections = 0;
+        QString selectedFolder = emptyPath;
+        QString pickerStart;
+        AccountWizardControllerTestAccess::setFolderDialog(controller, [&](const QString &startFolder) {
+            ++selections;
+            pickerStart = startFolder;
+            return selectedFolder;
+        });
+        controller.chooseLocalSyncFolder();
+        QCOMPARE(selections, 0);
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+        QCOMPARE(controller.localSyncFolder(), QStringLiteral("C:/PPCsyncConfig"));
+        controller.chooseLocalSyncFolder();
+        QCOMPARE(selections, 1);
+        QCOMPARE(pickerStart, QStringLiteral("C:/PPCsyncConfig"));
+        QCOMPARE(controller.localSyncFolder(), emptyPath);
+        QVERIFY2(controller.canFinish(), qPrintable(controller.localSyncFolderError()));
+        selectedFolder.clear();
+        controller.chooseLocalSyncFolder();
+        QCOMPARE(controller.localSyncFolder(), emptyPath);
+        AccountWizardControllerTestAccess::setBusy(controller, true);
+        controller.chooseLocalSyncFolder();
+        QCOMPARE(selections, 2);
+        AccountWizardControllerTestAccess::setBusy(controller, false);
+        QFile existingFile(QDir(emptyPath).filePath(QStringLiteral("previous-account.txt")));
+        QVERIFY(existingFile.open(QIODevice::WriteOnly));
+        existingFile.write("preserved bytes");
+        existingFile.close();
+        // The default path is also subject to the empty-folder rule before Browse is used.
+        AccountWizardController defaultController;
+        AccountWizardControllerTestAccess::preparePrivateCloud(defaultController, [](const QString &) {
+            return QStringLiteral("unused");
+        });
+        AccountWizardControllerTestAccess::completeAuthentication(defaultController);
+        AccountWizardControllerTestAccess::setLocalFolder(defaultController, emptyPath);
+        QVERIFY(!defaultController.canFinish());
+        QVERIFY(defaultController.localSyncFolderError().contains(QStringLiteral("empty")));
+        selectedFolder = emptyPath;
+        controller.chooseLocalSyncFolder();
+        QVERIFY(!controller.canFinish());
+        QVERIFY(controller.localSyncFolderError().contains(QStringLiteral("empty")));
+        QVERIFY(existingFile.open(QIODevice::ReadOnly));
+        QCOMPARE(existingFile.readAll(), QByteArray("preserved bytes"));
+        controller.cancel();
+        controller.chooseLocalSyncFolder();
+        QCOMPARE(selections, 3);
+    }
+
+    void privateCloudRechecksEmptyFolderAfterRemoteCheck()
+    {
+        QTemporaryDir location;
+        QVERIFY(location.isValid());
+        AccountWizardController controller;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [](const QString &) {
+            return QStringLiteral("unused");
+        });
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+        AccountWizardControllerTestAccess::setLocalFolder(controller, location.path());
+        QVERIFY2(controller.canFinish(), qPrintable(controller.localSyncFolderError()));
+        AccountWizardControllerTestAccess::showDriveSetup(controller);
+        AccountWizardControllerTestAccess::setBusy(controller, true);
+        QFile unexpectedFile(location.filePath(QStringLiteral("do-not-upload.txt")));
+        QVERIFY(unexpectedFile.open(QIODevice::WriteOnly));
+        unexpectedFile.write("private local data");
+        unexpectedFile.close();
+        QSignalSpy finishedSpy(&controller, &AccountWizardController::finished);
+        AccountWizardControllerTestAccess::completeRemoteFolderCheck(controller);
+        QCOMPARE(controller.currentStep(), AccountWizardController::SyncOptionsStep);
+        QVERIFY(!controller.busy());
+        QVERIFY(controller.errorText().contains(QStringLiteral("empty")));
+        QCOMPARE(finishedSpy.count(), 0);
+        QVERIFY(unexpectedFile.open(QIODevice::ReadOnly));
+        QCOMPARE(unexpectedFile.readAll(), QByteArray("private local data"));
+    }
+
+    void privateCloudPreparesEmptyFolderBeforeRemoteCheck()
+    {
+        QTemporaryDir location;
+        QVERIFY(location.isValid());
+        const auto selectedFolder = location.filePath(QStringLiteral("new-sync-folder"));
+        AccountWizardController controller;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [](const QString &) {
+            return QString();
+        });
+        auto *manager = new FakeQNAM({});
+        QList<QUrl> requests;
+        manager->setOverride([&requests, manager](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) {
+            requests.append(request.url());
+            return new FakeHangingReply(operation, request, manager);
+        });
+        AccountWizardControllerTestAccess::setNetworkManager(controller, manager);
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+        AccountWizardControllerTestAccess::setLocalFolder(controller, selectedFolder);
+        QVERIFY2(controller.canFinish(), qPrintable(controller.localSyncFolderError()));
+        controller.finish();
+        QCOMPARE(controller.currentStep(), AccountWizardController::DriveSetupStep);
+        QVERIFY(controller.busy());
+        QTRY_COMPARE(requests.size(), 1);
+        QVERIFY(requests.constFirst().path().contains(QStringLiteral("/remote.php/dav/files/alice/")));
+        QVERIFY(QDir(selectedFolder).exists());
+        QVERIFY(QDir(selectedFolder).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty());
+        QSettings settings(ConfigFile().configFile(), QSettings::IniFormat);
+        QVERIFY(!settings.contains(QStringLiteral("PrivateCloudBackingRoot/Path")));
+        controller.cancel();
+    }
+
+    void privateCloudFolderPageOffersBrowseAndConnectDrive()
+    {
+        QTemporaryDir location;
+        QVERIFY(location.isValid());
+        AccountWizardController controller;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [](const QString &) {
+            return QStringLiteral("Drive is occupied.");
+        });
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+        AccountWizardControllerTestAccess::setFolderDialog(controller, [&](const QString &) {
+            return location.path();
+        });
+        QQmlApplicationEngine engine;
+        engine.addImportPath(QStringLiteral("qrc:/qml/theme"));
+        engine.addImageProvider(QStringLiteral("svgimage-custom-color"), new Ui::SvgImageProvider);
+        QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/qml/src/gui/wizard/qml/AccountWizardWindow.qml")));
+        const auto object = std::unique_ptr<QObject>(component.createWithInitialProperties({{QStringLiteral("controller"), QVariant::fromValue(&controller)}}));
+        QVERIFY2(object, qPrintable(component.errorString()));
+        const auto window = qobject_cast<QQuickWindow *>(object.get());
+        QVERIFY(window);
+        QVERIFY(window->findChild<QObject *>(QStringLiteral("privateCloudFolderPage")));
+        const auto path = window->findChild<QObject *>(QStringLiteral("privateCloudFolderPath"));
+        const auto browse = window->findChild<QObject *>(QStringLiteral("privateCloudChooseFolder"));
+        const auto connectDrive = window->findChild<QObject *>(QStringLiteral("wizardFinishButton"));
+        const auto skip = window->findChild<QObject *>(QStringLiteral("wizardSkipFolderButton"));
+        const auto advanced = window->findChild<QObject *>(QStringLiteral("wizardAdvancedOptionsButton"));
+        QVERIFY(path);
+        QVERIFY(browse);
+        QVERIFY(connectDrive);
+        QVERIFY(skip);
+        QVERIFY(advanced);
+        window->show();
+        QTRY_VERIFY(window->isExposed());
+        QCOMPARE(path->property("text").toString(), QDir::toNativeSeparators(QStringLiteral("C:/PPCsyncConfig")));
+        QVERIFY(!skip->property("visible").toBool());
+        QVERIFY(!advanced->property("visible").toBool());
+        QCOMPARE(connectDrive->property("text").toString(), QStringLiteral("Connect drive"));
+        const auto screenshotPath = qEnvironmentVariable("PRIVATECLOUD_FOLDER_SCREENSHOT");
+        if (!screenshotPath.isEmpty()) {
+            QImage screenshot;
+            QTRY_VERIFY(!(screenshot = window->grabWindow()).isNull());
+            QVERIFY(screenshot.save(screenshotPath));
+        }
+        QVERIFY(QMetaObject::invokeMethod(browse, "clicked"));
+        QCOMPARE(controller.localSyncFolder(), location.path());
+        QCOMPARE(path->property("text").toString(), QDir::toNativeSeparators(location.path()));
+        QVERIFY(connectDrive->property("enabled").toBool());
+        QVERIFY(QMetaObject::invokeMethod(connectDrive, "clicked"));
+        QCOMPARE(controller.errorText(), QStringLiteral("Drive is occupied."));
+        QCOMPARE(controller.currentStep(), AccountWizardController::SyncOptionsStep);
+        AccountWizardControllerTestAccess::setBusy(controller, true);
+        QVERIFY(!browse->property("enabled").toBool());
+        QVERIFY(!connectDrive->property("enabled").toBool());
+        AccountWizardControllerTestAccess::setBusy(controller, false);
+        QCOMPARE(controller.syncMode(), AccountWizardController::VirtualFiles);
+        controller.cancel();
+    }
+
+    void privateCloudResumesPendingFolderAfterCancellation()
+    {
+        class TestVfs : public VfsOff
+        {
+        public:
+            Mode mode() const override
+            {
+                return WindowsCfApi;
+            }
+        };
+
+        const auto account = Account::create();
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl()));
+        account->setDavUser(QUuid::createUuid().toString());
+        const auto state = AccountStatePtr(new FakeAccountState(account));
+        FolderDefinition definition;
+        definition.localPath = PrivateCloudDrive::backingPath(account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + account->davUser());
+        definition.targetPath = QStringLiteral("/");
+        definition.journalPath = QStringLiteral(".sync-test.db");
+        definition.alias = QStringLiteral("pending-setup-test");
+        definition.paused = true;
+        definition.privateCloudSetupPending = true;
+        definition.virtualFilesMode = Vfs::WindowsCfApi;
+        Folder folder(definition, state.data(), std::make_unique<TestVfs>());
+        QPointer<Folder> retainedFolder(&folder);
+        auto availabilityChecks = 0;
+        const auto availabilityCheck = [&availabilityChecks](const QString &) {
+            ++availabilityChecks;
+            return QStringLiteral("Drive is occupied.");
+        };
+        {
+            AccountWizardController controller;
+            AccountWizardControllerTestAccess::preparePrivateCloud(controller, availabilityCheck);
+            QVERIFY(AccountWizardControllerTestAccess::resumePrivateCloudSetup(controller, &folder));
+            QVERIFY(!controller.startLoginFlowAutomatically());
+            QTRY_COMPARE(availabilityChecks, 1);
+            QCOMPARE(controller.currentStep(), AccountWizardController::DriveSetupStep);
+            controller.cancel();
+        }
+        QVERIFY(retainedFolder);
+        QVERIFY(folder.privateCloudSetupPending());
+        QVERIFY(folder.syncPaused());
+        AccountWizardController resumedController;
+        AccountWizardControllerTestAccess::preparePrivateCloud(resumedController, availabilityCheck);
+        QVERIFY(AccountWizardControllerTestAccess::resumePrivateCloudSetup(resumedController, &folder));
+        QTRY_COMPARE(availabilityChecks, 2);
+        QCOMPARE(QDir(resumedController.localSyncFolder()), QDir(definition.localPath));
+        QCOMPARE(resumedController.errorText(), QStringLiteral("Drive is occupied."));
+        resumedController.cancel();
+    }
+
+    void privateCloudSetupPageShowsErrorAndRetry()
+    {
+#ifdef Q_OS_WIN
+        if (!qEnvironmentVariable("PRIVATECLOUD_TEST_SCREENSHOT").isEmpty()) {
+            QFontDatabase::addApplicationFont(QDir(qEnvironmentVariable("SystemRoot")).filePath(QStringLiteral("Fonts/segoeui.ttf")));
+            QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+        }
+#endif
+        AccountWizardController controller;
+        auto availabilityChecks = 0;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [&availabilityChecks](const QString &) {
+            ++availabilityChecks;
+            return QStringLiteral("Drive X: is already in use. Free the drive letter and try again.");
+        });
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+        AccountWizardControllerTestAccess::showDriveSetup(controller);
+        controller.finish();
+        QCOMPARE(availabilityChecks, 1);
+
+        QQmlApplicationEngine engine;
+        engine.addImportPath(QStringLiteral("qrc:/qml/theme"));
+        engine.addImageProvider(QStringLiteral("svgimage-custom-color"), new Ui::SvgImageProvider);
+        QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/qml/src/gui/wizard/qml/AccountWizardWindow.qml")));
+        const auto object = std::unique_ptr<QObject>(component.createWithInitialProperties({{QStringLiteral("controller"), QVariant::fromValue(&controller)}}));
+        QVERIFY2(object, qPrintable(component.errorString()));
+        const auto window = qobject_cast<QQuickWindow *>(object.get());
+        QVERIFY(window);
+        const auto setupPage = window->findChild<QObject *>(QStringLiteral("privateCloudSetupPage"));
+        QVERIFY(setupPage);
+        const auto retry = window->findChild<QObject *>(QStringLiteral("wizardFinishButton"));
+        QVERIFY(retry);
+        window->show();
+        QTRY_VERIFY(retry->property("visible").toBool());
+        QVERIFY(retry->property("enabled").toBool());
+        QCOMPARE(retry->property("text").toString(), QStringLiteral("Retry"));
+        QVERIFY(QMetaObject::invokeMethod(retry, "clicked"));
+        QCOMPARE(availabilityChecks, 2);
+        QCOMPARE(controller.currentStep(), AccountWizardController::DriveSetupStep);
+        AccountWizardControllerTestAccess::setBusy(controller, true);
+        QVERIFY(!retry->property("enabled").toBool());
+        AccountWizardControllerTestAccess::setBusy(controller, false);
+
+        const auto screenshotPath = qEnvironmentVariable("PRIVATECLOUD_TEST_SCREENSHOT");
+        if (!screenshotPath.isEmpty()) {
+            QTRY_VERIFY(window->isExposed());
+            QImage screenshot;
+            QTRY_VERIFY(!(screenshot = window->grabWindow()).isNull());
+            QVERIFY(screenshot.save(screenshotPath));
+        }
     }
 
     void normalizesCommonServerUrlSuffixes()
@@ -60,16 +691,26 @@ private Q_SLOTS:
                  QStringLiteral("https://cloud.example/"));
     }
 
+    void rejectsLoginFlowOutsideCompiledServerRestriction()
+    {
+        const auto enforcedUrl = Account::enforcedServerUrl();
+        if (enforcedUrl.isEmpty()) {
+            QSKIP("This test requires a compiled server restriction.");
+        }
+        AccountWizardController controller;
+        QVERIFY(!controller.setServerUrlForLoginFlow(QUrl(QStringLiteral("https://unconfigured.example.com"))));
+        QCOMPARE(controller.serverUrl(), enforcedUrl.toString());
+        QVERIFY(!controller.errorText().isEmpty());
+        QVERIFY(controller.setServerUrlForLoginFlow(enforcedUrl));
+        QCOMPARE(controller.serverUrl(), enforcedUrl.toString());
+    }
+
     void defaultsToHttpsWhenSchemeIsMissing()
     {
-        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QString()),
-                 QString());
-        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QStringLiteral("cloud.example")),
-                 QStringLiteral("https://cloud.example"));
-        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QStringLiteral("cloud.example:8080")),
-                 QStringLiteral("https://cloud.example:8080"));
-        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QStringLiteral("http://cloud.example")),
-                 QStringLiteral("http://cloud.example"));
+        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QString()), QString());
+        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QStringLiteral("cloud.example")), QStringLiteral("https://cloud.example"));
+        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QStringLiteral("cloud.example:8080")), QStringLiteral("https://cloud.example:8080"));
+        QCOMPARE(AccountWizardController::normalizeServerUrlInput(QStringLiteral("http://cloud.example")), QStringLiteral("http://cloud.example"));
     }
 
     void localNetworkPermissionCheckIgnoresInvalidUrls()
@@ -109,10 +750,7 @@ private Q_SLOTS:
         AccountWizardControllerTestAccess::setAccountUrl(controller, serverUrl);
         QSignalSpy recoverySpy(&controller, &AccountWizardController::secureConnectionFailed);
 
-        QVERIFY(QMetaObject::invokeMethod(&controller,
-                                          "slotNoServerFoundTimeout",
-                                          Qt::DirectConnection,
-                                          Q_ARG(QUrl, serverUrl)));
+        QVERIFY(QMetaObject::invokeMethod(&controller, "slotNoServerFoundTimeout", Qt::DirectConnection, Q_ARG(QUrl, serverUrl)));
 
         QCOMPARE(recoverySpy.count(), 1);
         const auto arguments = recoverySpy.takeFirst();
@@ -300,11 +938,11 @@ private Q_SLOTS:
             theme->setForceOverrideServerUrl(previousForceOverrideServerUrl);
         });
 
-        theme->setOverrideServerUrl(QStringLiteral(
-            "["
-            R"({"name": "Primary", "url": "https://primary.example"},)"
-            R"({"name": "Secondary", "url": "https://secondary.example"})"
-            "]"));
+        theme->setOverrideServerUrl(
+            QStringLiteral("["
+                           R"({"name": "Primary", "url": "https://primary.example"},)"
+                           R"({"name": "Secondary", "url": "https://secondary.example"})"
+                           "]"));
         theme->setForceOverrideServerUrl(true);
 
         AccountWizardController controller;
@@ -329,19 +967,13 @@ private Q_SLOTS:
         const auto previousOverrideServerUrl = theme->overrideServerUrl();
         const auto previousForceOverrideServerUrl = theme->forceOverrideServerUrl();
         const auto previousStartLoginFlowAutomatically = theme->startLoginFlowAutomatically();
-        const auto restoreConfiguration = qScopeGuard([
-            &cfg,
-            theme,
-            previousConfiguredOverrideServerUrl,
-            previousOverrideServerUrl,
-            previousForceOverrideServerUrl,
-            previousStartLoginFlowAutomatically
-        ] {
-            cfg.setOverrideServerUrl(previousConfiguredOverrideServerUrl);
-            theme->setOverrideServerUrl(previousOverrideServerUrl);
-            theme->setForceOverrideServerUrl(previousForceOverrideServerUrl);
-            theme->setStartLoginFlowAutomatically(previousStartLoginFlowAutomatically);
-        });
+        const auto restoreConfiguration = qScopeGuard(
+            [&cfg, theme, previousConfiguredOverrideServerUrl, previousOverrideServerUrl, previousForceOverrideServerUrl, previousStartLoginFlowAutomatically] {
+                cfg.setOverrideServerUrl(previousConfiguredOverrideServerUrl);
+                theme->setOverrideServerUrl(previousOverrideServerUrl);
+                theme->setForceOverrideServerUrl(previousForceOverrideServerUrl);
+                theme->setStartLoginFlowAutomatically(previousStartLoginFlowAutomatically);
+            });
 
         cfg.setOverrideServerUrl(QStringLiteral("https://cloud.example"));
         theme->setOverrideServerUrl({});

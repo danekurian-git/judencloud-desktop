@@ -22,6 +22,8 @@
 #include <QDateTime>
 #include <qstack.h>
 #include <QCoreApplication>
+#include <QtConcurrentRun>
+#include <QScopeGuard>
 
 #include <filesystem>
 #include <ctime>
@@ -35,6 +37,8 @@ Q_LOGGING_CATEGORY(lcPropagateLocalMkdir, "nextcloud.sync.propagator.localmkdir"
 Q_LOGGING_CATEGORY(lcPropagateLocalRename, "nextcloud.sync.propagator.localrename", QtInfoMsg)
 
 namespace {
+
+std::atomic_uint pendingLocalFileOperations = 0;
 
 std::optional<QString> journalRelativePath(const QString &syncRoot, const QString &filesystemPath)
 {
@@ -63,79 +67,237 @@ QByteArray localFileIdFromFullId(const QByteArray &id)
     return id.left(8);
 }
 
-/**
- * The code will update the database in case of error.
- * If everything goes well (no error, returns true), the caller is responsible for removing the entries
- * in the database.  But in case of error, we need to remove the entries from the database of the files
- * that were deleted.
- *
- * \a path is relative to propagator()->_localDir + _item->_file and should start with a slash
- */
-bool PropagateLocalRemove::removeRecursively(const QString &path)
+bool OwncloudPropagator::hasPendingLocalFileOperations()
 {
-    QString absolute = propagator()->fullLocalPath(_item->_file + path);
-    QList<QPair<QString, bool>> deleted;
-    QString conversionError;
-    const auto fileInfo = QFileInfo{absolute};
-    const auto parentFolderPath = fileInfo.dir().absolutePath();
+    return pendingLocalFileOperations.load() != 0;
+}
+
+PropagateLocalRemove::PendingLocalFileOperation::PendingLocalFileOperation()
+{
+    ++pendingLocalFileOperations;
+}
+
+PropagateLocalRemove::PendingLocalFileOperation::~PendingLocalFileOperation()
+{
+    --pendingLocalFileOperations;
+}
+
+PropagateLocalRemove::~PropagateLocalRemove()
+{
+    _cancelled->store(true);
+}
+
+void PropagateLocalRemove::abort(PropagatorJob::AbortType abortType)
+{
+    _cancelled->store(true);
+    if (_removalWatcher) {
+        if (abortType == AbortType::Asynchronous) {
+            _abortPending = true;
+            return;
+        }
+        // A native recycle operation cannot be interrupted. Its worker owns only
+        // copied paths; detach completion instead of blocking the hydration thread.
+        disconnect(_removalWatcher, nullptr, this, nullptr);
+        propagator()->_activeJobList.removeAll(this);
+        _removalWatcher = nullptr;
+        _pendingLocalFileOperation.reset();
+        return;
+    }
+    PropagatorJob::abort(abortType);
+}
+
+PropagateLocalRemove::RemovalResult PropagateLocalRemove::removeRecursively(const QString &absolute,
+                                                                            const QString &syncRoot,
+                                                                            const QSet<QString> &deleteToClientTrashBin,
+                                                                            const std::shared_ptr<std::atomic_bool> &cancelled)
+{
+    RemovalResult result;
+    if (cancelled->load()) {
+        return result;
+    }
+    const auto parentFolderPath = QFileInfo(absolute).dir().absolutePath();
     const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};
+    result.success = FileSystem::removeRecursively(
+        absolute,
+        [&result, &syncRoot](const QString &path, bool isDir) {
+            const auto relativePath = journalRelativePath(syncRoot, path);
+            if (!relativePath) {
+                result.error = QStringLiteral("Filesystem path is outside the sync root");
+                return;
+            }
+            result.deleted.prepend(qMakePair(*relativePath, isDir));
+        },
+        nullptr,
+        nullptr,
+        [&deleteToClientTrashBin, &cancelled](const QString &path, QString *error) {
+            if (cancelled->load()) {
+                return false;
+            }
+            if (deleteToClientTrashBin.contains(path) && FileSystem::moveToTrash(path, error)) {
+                return true;
+            }
+            return !cancelled->load() && FileSystem::remove(path, error);
+        },
+        [cancelled] {
+            return cancelled->load();
+        });
+    return result;
+}
 
-    qCInfo(lcPropagateLocalRemove()) << "delete" << absolute;
-
-    Q_EMIT propagator()->touchedFile(absolute);
-
-    // FileSystem::removeRecursively() reports deleted items as absolute filesystem paths using
-    // the host's native separators. Convert them before storing them for journal cleanup, which
-    // uses normalized paths relative to the sync folder.
-    const auto success = FileSystem::removeRecursively(absolute,
-                                                       [&deleted, &conversionError, root = propagator()->localPath()](const QString &path, bool isDir) {
-                                                           // by prepending, a folder deletion may be followed by content deletions
-                                                           const auto relativePath = journalRelativePath(root, path);
-                                                           if (!relativePath) {
-                                                               conversionError = QStringLiteral("Filesystem path is outside the sync root");
-                                                               return;
-                                                           }
-                                                           deleted.prepend(qMakePair(*relativePath, isDir));
-                                                       },
-                                                       nullptr,
-                                                       nullptr,
-                                                       [this] (const QString &itemPath, QString *removeError) -> bool {
-                                                           auto result = false;
-
-                                                           if (_deleteToClientTrashBin.contains(itemPath)) {
-                                                               result = FileSystem::moveToTrash(itemPath, removeError);
-                                                               if (!result) {
-                                                                   result = FileSystem::remove(itemPath, removeError);
-                                                               }
-                                                           } else {
-                                                               result = FileSystem::remove(itemPath, removeError);
-                                                           }
-
-                                                           return result;
-                                                       });
-
-    if (!success) {
-        // We need to delete the entries from the database now from the deleted vector.
-        // Do it while avoiding redundant delete calls to the journal.
+bool PropagateLocalRemove::updateJournalAfterRemoval(const RemovalResult &result, bool aborted)
+{
+    if (!result.success || aborted) {
         QString deletedDir;
-        for (const auto &it : deleted) {
-            if (isPathInsideDeletedDir(it.first, deletedDir)) {
+        for (const auto &entry : result.deleted) {
+            if (isPathInsideDeletedDir(entry.first, deletedDir)) {
                 continue;
             }
-            if (propagator()->_journal->deleteFileRecord(it.first, it.second)) {
-                if (it.second) {
-                    deletedDir = it.first;
+            if (propagator()->_journal->deleteFileRecord(entry.first, entry.second)) {
+                if (entry.second) {
+                    deletedDir = entry.first;
                 }
             } else {
-                qCWarning(lcPropagateLocalRemove) << "Failed to delete file record from local DB" << it.first;
+                qCWarning(lcPropagateLocalRemove) << "Failed to delete file record from local DB" << entry.first;
             }
         }
     }
-    if (!conversionError.isEmpty()) {
-        qCWarning(lcPropagateLocalRemove) << "Failed to convert a deleted filesystem path to a journal path:" << conversionError;
+    if (!result.error.isEmpty()) {
+        qCWarning(lcPropagateLocalRemove) << result.error;
         return false;
     }
-    return success;
+    return result.success;
+}
+
+PropagateLocalRemove::RemovalResult PropagateLocalRemove::removeLocalItem(const QString &filename,
+                                                                          const QString &relativePath,
+                                                                          const QString &syncRoot,
+                                                                          bool isDirectory,
+                                                                          bool moveToTrash,
+                                                                          bool allowTrash,
+                                                                          const QSet<QString> &deleteToClientTrashBin,
+                                                                          const std::shared_ptr<std::atomic_bool> &cancelled)
+{
+    RemovalResult result;
+    if (cancelled->load()) {
+        return result;
+    }
+    if (OwncloudPropagator::localFileNameClash(syncRoot, relativePath)) {
+        result.nameClash = true;
+        return result;
+    }
+
+    const auto fileInfo = QFileInfo{filename};
+    if (!FileSystem::fileExists(filename, fileInfo)) {
+        result.success = true;
+        result.deleted.append(qMakePair(relativePath, isDirectory));
+        return result;
+    }
+
+    auto moveToTrashIsFeasible = allowTrash;
+    if (moveToTrash && moveToTrashIsFeasible) {
+        if (fileInfo.isDir()) {
+            try {
+                if (FileSystem::isFolderReadOnly(fileInfo.filesystemAbsolutePath())) {
+                    moveToTrashIsFeasible = false;
+                }
+            } catch (const std::exception &error) {
+                qCWarning(lcPropagateLocalRemove) << "exception when checking parent folder read only status" << error.what();
+            } catch (...) {
+                qCWarning(lcPropagateLocalRemove) << "exception when checking parent folder read only status";
+            }
+        } else if (!FileSystem::isWritable(filename, fileInfo)) {
+            moveToTrashIsFeasible = false;
+        }
+    }
+    if (cancelled->load()) {
+        return result;
+    }
+    if (moveToTrash && moveToTrashIsFeasible) {
+        const auto parentFolderPath = fileInfo.dir().absolutePath();
+        const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};
+        if (!cancelled->load()) {
+            result.success = FileSystem::moveToTrash(filename, &result.error);
+        }
+        if (result.success) {
+            result.deleted.append(qMakePair(relativePath, isDirectory));
+        }
+        return result;
+    }
+    if (isDirectory) {
+        return removeRecursively(filename, syncRoot, deleteToClientTrashBin, cancelled);
+    }
+
+    const auto parentFolderPath = fileInfo.dir().absolutePath();
+    const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};
+    if (!cancelled->load()) {
+        result.success = FileSystem::remove(filename, &result.error);
+    }
+    if (result.success) {
+        result.deleted.append(qMakePair(relativePath, false));
+    }
+    return result;
+}
+
+void PropagateLocalRemove::startAsyncRemoval(const QString &filename)
+{
+    // Native permission checks and deletion can trigger a virus scanner to hydrate
+    // a placeholder. Keep the account thread free to service those callbacks.
+    auto *watcher = new QFutureWatcher<RemovalResult>(this);
+    _removalWatcher = watcher;
+    propagator()->_activeJobList.append(this);
+    connect(watcher, &QFutureWatcher<RemovalResult>::finished, this, [this, watcher] {
+        const auto result = watcher->result();
+        _removalWatcher = nullptr;
+        watcher->deleteLater();
+        propagator()->_activeJobList.removeAll(this);
+        if (_abortPending) {
+            // A native operation may finish after cancellation. Reconcile only
+            // entries actually deleted while this journal owner is still alive.
+            updateJournalAfterRemoval(result, true);
+            propagator()->_journal->commit("Aborted local remove");
+            _pendingLocalFileOperation.reset();
+            _state = Finished;
+            Q_EMIT abortFinished();
+            return;
+        }
+        if (result.nameClash) {
+            _pendingLocalFileOperation.reset();
+            //: %1 is the local path of the file that could not be removed.
+            done(SyncFileItem::FileNameClash,
+                 tr("Could not remove %1 because of a local file name clash").arg(QDir::toNativeSeparators(propagator()->fullLocalPath(_item->_file))),
+                 ErrorCategory::GenericError);
+            return;
+        }
+        const auto removalSucceeded = updateJournalAfterRemoval(result);
+        _pendingLocalFileOperation.reset();
+        if (!removalSucceeded) {
+            done(SyncFileItem::NormalError, tr("Temporary error when removing local item removed from server."), ErrorCategory::GenericError);
+            return;
+        }
+        completeRemoval();
+    });
+    _pendingLocalFileOperation = std::make_shared<PendingLocalFileOperation>();
+    watcher->setFuture(QtConcurrent::run([filename,
+                                          relativePath = _item->_file,
+                                          isDirectory = _item->isDirectory(),
+                                          moveToTrash = _moveToTrash,
+                                          allowTrash = propagator()->syncOptions()._vfs->mode() == Vfs::WindowsCfApi,
+                                          syncRoot = propagator()->localPath(),
+                                          deleteToClientTrashBin = _deleteToClientTrashBin,
+                                          cancelled = _cancelled,
+                                          pendingOperation = _pendingLocalFileOperation] {
+        try {
+            return removeLocalItem(filename, relativePath, syncRoot, isDirectory, moveToTrash, allowTrash, deleteToClientTrashBin, cancelled);
+        } catch (const std::exception &error) {
+            RemovalResult result;
+            result.error = QString::fromUtf8(error.what());
+            return result;
+        } catch (...) {
+            RemovalResult result;
+            result.error = QStringLiteral("Unexpected exception while removing a local item");
+            return result;
+        }
+    }));
 }
 
 void PropagateLocalRemove::start()
@@ -152,72 +314,14 @@ void PropagateLocalRemove::start()
     const QString filename = propagator()->fullLocalPath(_item->_file);
     qCInfo(lcPropagateLocalRemove) << "Going to delete:" << filename;
 
-    if (propagator()->localFileNameClash(_item->_file)) {
-        done(SyncFileItem::FileNameClash, tr("Could not remove %1 because of a local file name clash").arg(QDir::toNativeSeparators(filename)), ErrorCategory::GenericError);
-        return;
+    if (_item->isDirectory()) {
+        Q_EMIT propagator()->touchedFile(filename);
     }
+    startAsyncRemoval(filename);
+}
 
-    QString removeError;
-    auto moveToTrashIsFeasible = true;
-    if (propagator()->syncOptions()._vfs->mode() != OCC::Vfs::WindowsCfApi) {
-        moveToTrashIsFeasible = false;
-    }
-    const auto fileInfo = QFileInfo{filename};
-    if (fileInfo.isDir()) {
-        try {
-            if (FileSystem::isFolderReadOnly(fileInfo.filesystemAbsolutePath())) {
-                moveToTrashIsFeasible = false;
-            }
-        }
-        catch (const std::filesystem::filesystem_error &e)
-        {
-            qCWarning(lcPropagateLocalRemove) << "exception when checking parent folder read only status" << e.what() << e.path1().c_str() << e.path2().c_str();
-        }
-        catch (const std::system_error &e)
-        {
-            qCWarning(lcPropagateLocalRemove) << "exception when checking parent folder read only status" << e.what();
-        }
-        catch (...)
-        {
-            qCWarning(lcPropagateLocalRemove) << "exception when checking parent folder read only status";
-        }
-    } else {
-        if (!FileSystem::isWritable(filename, fileInfo)) {
-            moveToTrashIsFeasible = false;
-        }
-    }
-    if (_moveToTrash && moveToTrashIsFeasible) {
-        if (FileSystem::fileExists(filename, fileInfo)) {
-            const auto parentFolderPath = fileInfo.dir().absolutePath();
-            const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};
-
-            if (!FileSystem::moveToTrash(filename, &removeError)) {
-                qCWarning(lcPropagateLocalRemove()) << "move to trash failed" << filename << removeError;
-                done(SyncFileItem::NormalError, tr("Temporary error when removing local item removed from server."), ErrorCategory::GenericError);
-                return;
-            }
-        } else {
-            qCWarning(lcPropagateLocalRemove()) << "move to trash failed" << filename << "was already deleted";
-        }
-    } else {
-        if (_item->isDirectory()) {
-            if (FileSystem::fileExists(filename, fileInfo) && !removeRecursively(QString())) {
-                done(SyncFileItem::NormalError, tr("Temporary error when removing local item removed from server."), ErrorCategory::GenericError);
-                return;
-            }
-        } else {
-            if (FileSystem::fileExists(filename, fileInfo)) {
-                const auto parentFolderPath = fileInfo.dir().absolutePath();
-                const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};
-
-                if (!FileSystem::remove(filename, &removeError)) {
-                    qCWarning(lcPropagateLocalRemove()) << "remove failed" << filename << removeError;
-                    done(SyncFileItem::NormalError, tr("Temporary error when removing local item removed from server."), ErrorCategory::GenericError);
-                    return;
-                }
-            }
-        }
-    }
+void PropagateLocalRemove::completeRemoval()
+{
     propagator()->reportProgress(*_item, 0);
     if (!propagator()->_journal->deleteFileRecord(_item->_originalFile, _item->isDirectory())) {
         qCWarning(lcPropagateLocalRemove()) << "could not delete file from local DB" << _item->_originalFile;

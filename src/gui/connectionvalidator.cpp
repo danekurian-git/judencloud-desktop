@@ -13,11 +13,13 @@
 #include <QXmlStreamReader>
 
 #include "connectionvalidator.h"
+#include "theme.h"
 #include "account.h"
 #include "accountstate.h"
 #include "userinfo.h"
 #include "networkjobs.h"
 #include "clientproxy.h"
+#include "privatecloudtransport.h"
 #include "localnetworkpermission.h"
 #include <creds/abstractcredentials.h>
 #include "systray.h"
@@ -45,13 +47,19 @@ ConnectionValidator::ConnectionValidator(AccountStatePtr accountState, const QSt
 void ConnectionValidator::checkServerAndAuth()
 {
     if (!_account) {
-        _errors << tr("No %1 account configured", "The placeholder will be the application name. Please keep it").arg(APPLICATION_NAME);
+        _errors << tr("No %1 account configured", "The placeholder will be the application name. Please keep it").arg(Theme::instance()->appNameGUI());
         reportResult(NotConfigured);
         return;
     }
     qCDebug(lcConnectionValidator) << "Checking server and authentication";
 
     _isCheckingServerAndAuth = true;
+
+    if (PrivateCloudTransport::isRequired()) {
+        PrivateCloudTransport::apply(_account->networkAccessManager());
+        QMetaObject::invokeMethod(this, "slotCheckRedirectCostFreeUrl", Qt::QueuedConnection);
+        return;
+    }
 
     // Lookup system proxy in a thread https://github.com/owncloud/client/issues/2993
     if (ClientProxy::isUsingSystemDefault() || _account->proxyType() == QNetworkProxy::DefaultProxy) {
@@ -69,6 +77,13 @@ void ConnectionValidator::systemProxyLookupDone(const QNetworkProxy &proxy)
 {
     if (!_account) {
         qCWarning(lcConnectionValidator) << "Bailing out, Account had been deleted";
+        return;
+    }
+
+    // A lookup started before bootstrap enabled the policy may finish later.
+    if (PrivateCloudTransport::isRequired()) {
+        PrivateCloudTransport::apply(_account->networkAccessManager());
+        slotCheckRedirectCostFreeUrl();
         return;
     }
 
@@ -130,7 +145,11 @@ void ConnectionValidator::slotStatusFound(const QUrl &url, const QJsonObject &in
     // Update server url in case of redirection
     if (_account->url() != url) {
         qCInfo(lcConnectionValidator()) << "status.php was redirected to" << url.toString();
-        _account->setUrl(url);
+        if (!_account->setUrl(url)) {
+            _errors.append(tr("The server redirected this account to a server that is not allowed."));
+            reportResult(StatusNotFound);
+            return;
+        }
         Q_EMIT _account->wantsAccountSaved(_account);
     }
 

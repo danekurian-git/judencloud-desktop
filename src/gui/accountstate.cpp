@@ -20,6 +20,7 @@
 #include "settings/migration.h"
 
 #include <QSettings>
+#include <QScopedValueRollback>
 #include <QTimer>
 #include <QFontMetrics>
 #include <QJsonDocument>
@@ -123,7 +124,7 @@ void AccountState::setState(State state)
 
         if (_state == SignedOut) {
             _connectionStatus = ConnectionValidator::Undefined;
-            if (oldState != _state && oldState == Disconnected) {
+            if (oldState == Disconnected && !_signingOutByUi) {
                 qCInfo(lcAccountState) << "Invalid credentials for" << _account->url().toString() << "login needed";
                 setState(AskingCredentials);
             }
@@ -194,6 +195,8 @@ bool AccountState::isSignedOut() const
 
 void AccountState::signOutByUi()
 {
+    const QScopedValueRollback signingOut(_signingOutByUi, true);
+    _lastConnectionValidatorStatus = ConnectionValidator::Undefined;
     account()->credentials()->forgetSensitiveData();
     account()->clearCookieJar();
     setState(SignedOut);

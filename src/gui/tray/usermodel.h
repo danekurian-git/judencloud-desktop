@@ -293,6 +293,8 @@ public:
     ~UserModel() override = default;
 
     void addUser(AccountStatePtr &user, const bool &isCurrent = false);
+    // Called after the user has explicitly requested removing this connection.
+    void removeAccountConnection(int id);
     [[nodiscard]] int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     [[nodiscard]] QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
 

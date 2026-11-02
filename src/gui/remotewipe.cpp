@@ -4,194 +4,178 @@
  */
 
 #include "remotewipe.h"
+#include "accessmanager.h"
 #include "folderman.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QBuffer>
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcRemoteWipe, "nextcloud.gui.remotewipe", QtInfoMsg)
 
 RemoteWipe::RemoteWipe(AccountPtr account, QObject *parent)
-    : QObject(parent),
-      _account(account),
-      _appPassword(QString()),
-      _networkManager{new QNetworkAccessManager{this}}
+    : QObject(parent)
+    , _account(std::move(account))
+    , _networkManager(new AccessManager(this))
 {
-    QObject::connect(AccountManager::instance(), &AccountManager::accountRemoved,
-                     this, [=, this](AccountState *accountState) {
-        if (_account != accountState->account()) {
-            return;
+    constexpr auto requestTimeoutMs = 30000;
+    _checkDeadline.setSingleShot(true);
+    _checkDeadline.setInterval(requestTimeoutMs);
+    _successDeadline.setSingleShot(true);
+    _successDeadline.setInterval(requestTimeoutMs);
+    connect(&_checkDeadline, &QTimer::timeout, this, [this] {
+        cancelCheck();
+        if (const auto state = currentAccountState()) {
+            state->handleInvalidCredentials();
         }
-
-        if (!_account->isRemoteWipeRequested_HACK()) {
-            return;
-        }
-
-        notifyServerSuccess();
     });
-
+    connect(&_successDeadline, &QTimer::timeout, this, [this] {
+        const auto reply = _networkReplySuccess;
+        _networkReplySuccess.clear();
+        if (reply) {
+            reply->disconnect(this);
+            reply->abort();
+            reply->deleteLater();
+        }
+        qCWarning(lcRemoteWipe) << "Remote wipe completion notification timed out";
+    });
+    connect(AccountManager::instance(), &AccountManager::accountRemoved, this, [this](AccountState *state) {
+        if (state && state->account() == _account) {
+            // Shutdown and ordinary account removal are not proof of a wipe.
+            cancelCheck();
+        }
+    });
+    connect(_networkManager, &QNetworkAccessManager::sslErrors, _account.data(), &Account::slotHandleSslErrors);
     if (FolderMan::instance()) {
-        qCDebug(lcRemoteWipe) << "FolderMan instance is present, a remote wipe will clean up local data first";
         _canWipeLocalFiles = true;
-        QObject::connect(this, &RemoteWipe::authorized, FolderMan::instance(),
-                         &FolderMan::slotWipeFolderForAccount);
-        QObject::connect(FolderMan::instance(), &FolderMan::wipeDone, this,
-                         &RemoteWipe::slotWipeDone);
+        connect(this, &RemoteWipe::authorized, FolderMan::instance(), &FolderMan::slotWipeFolderForAccount);
+        connect(FolderMan::instance(), &FolderMan::wipeDone, this, &RemoteWipe::slotWipeDone);
     }
+    connect(_account.data(), &Account::appPasswordRetrieved, this, &RemoteWipe::startCheckJobWithAppPassword);
+}
 
-    QObject::connect(_account.data(), &Account::appPasswordRetrieved, this,
-                     &RemoteWipe::startCheckJobWithAppPassword);
+AccountStatePtr RemoteWipe::currentAccountState() const
+{
+    for (const auto &state : AccountManager::instance()->accounts()) {
+        if (state->account() == _account) {
+            return state;
+        }
+    }
+    return {};
+}
+
+QNetworkReply *RemoteWipe::postToken(const QString &endpoint)
+{
+    auto request = QNetworkRequest(Utility::concatUrlPath(_account->url().toString(), endpoint));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/x-www-form-urlencoded"));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    request.setSslConfiguration(_account->getOrCreateSslConfig());
+    // Percent encoding also protects '&', '=' and '+' in a token from form parsing.
+    return _networkManager->post(request, QByteArrayLiteral("token=") + QUrl::toPercentEncoding(_appPassword));
+}
+
+void RemoteWipe::cancelCheck()
+{
+    _checkDeadline.stop();
+    const auto reply = _networkReplyCheck;
+    _networkReplyCheck.clear();
+    if (reply) {
+        reply->disconnect(this);
+        reply->abort();
+        reply->deleteLater();
+    }
 }
 
 void RemoteWipe::startCheckJobWithAppPassword(QString pwd)
 {
-    if (pwd.isEmpty()) {
-        qCDebug(lcRemoteWipe) << "not checking remote wipe status: app password is empty";
+    if (pwd.isEmpty() || _networkReplyCheck || _wipeAuthorized || !currentAccountState()) {
         return;
     }
-
-    _appPassword = pwd;
-    QUrl requestUrl = Utility::concatUrlPath(_account->url().toString(),
-                                             QLatin1String("/index.php/core/wipe/check"));
-    QNetworkRequest request;
-    request.setHeader(QNetworkRequest::ContentTypeHeader,
-                      "application/x-www-form-urlencoded");
-    request.setUrl(requestUrl);
-    request.setSslConfiguration(_account->getOrCreateSslConfig());
-    auto requestBody = new QBuffer;
-    QUrlQuery arguments(QStringLiteral("token=%1").arg(_appPassword));
-    requestBody->setData(arguments.query(QUrl::FullyEncoded).toLatin1());
-    _networkReplyCheck = _networkManager->post(request, requestBody);
-    QObject::connect(_networkManager, &QNetworkAccessManager::sslErrors,
-        _account.data(), &Account::slotHandleSslErrors);
-    QObject::connect(_networkReplyCheck, &QNetworkReply::finished, this,
-                     &RemoteWipe::slotCheckJob);
+    _appPassword = std::move(pwd);
+    _checkUrl = _account->url();
+    _checkAccountId = _account->id();
+    _checkDavUser = _account->davUser();
+    auto *reply = postToken(QStringLiteral("/index.php/core/wipe/check"));
+    _networkReplyCheck = reply;
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        slotCheckJob(reply);
+    });
+    _checkDeadline.start();
 }
 
-void RemoteWipe::slotCheckJob()
+void RemoteWipe::slotCheckJob(QNetworkReply *reply)
 {
-    auto jsonData = _networkReplyCheck->readAll();
-    QJsonParseError jsonParseError{};
-    QJsonObject json = QJsonDocument::fromJson(jsonData, &jsonParseError).object();
-    bool wipe = false;
-
-    //check for errors
-    if (_networkReplyCheck->error() != QNetworkReply::NoError ||
-            jsonParseError.error != QJsonParseError::NoError) {
-        QString errorFromJson = json["error"].toString();
-        if (!errorFromJson.isEmpty()) {
-            qCWarning(lcRemoteWipe) << QStringLiteral("Error returned from the server: <em>%1<em>")
-                                       .arg(errorFromJson.toHtmlEscaped());
-        } else if (_networkReplyCheck->error() != QNetworkReply::NoError) {
-            qCWarning(lcRemoteWipe) << QStringLiteral("There was an error accessing the 'token' endpoint: <br><em>%1</em>")
-                              .arg(_networkReplyCheck->errorString().toHtmlEscaped());
-        } else if (jsonParseError.error != QJsonParseError::NoError) {
-            qCWarning(lcRemoteWipe) << QStringLiteral("Could not parse the JSON returned from the server: <br><em>%1</em>")
-                              .arg(jsonParseError.errorString());
-        } else {
-            qCWarning(lcRemoteWipe) <<  QStringLiteral("The reply from the server did not contain all expected fields");
-        }
-
-    // check for wipe request
-    } else if (!json.value("wipe").isUndefined()) {
-        wipe = json["wipe"].toBool();
+    if (_networkReplyCheck != reply) {
+        return;
     }
-
-    auto manager = AccountManager::instance();
-    auto accountState = manager->account(_account->displayName()).data();
-
-    if (wipe) {
-        qCInfo(lcRemoteWipe) << "Starting remote wipe for" << _account->displayName();
-
-        /* IMPORTANT - remove later - FIXME MS@2019-12-07 -->
-         * TODO: For "Log out" & "Remove account": Remove client CA certs and KEY!
-         *
-         *       Disabled as long as selecting another cert is not supported by the UI.
-         *
-         *       Being able to specify a new certificate is important anyway: expiry etc.
-         *
-         *       We introduce this dirty hack here, to allow deleting them upon Remote Wipe.
-         */
-        _account->setRemoteWipeRequested_HACK();
-        // <-- FIXME MS@2019-12-07
-
-        // delete data
-        Q_EMIT authorized(accountState);
-
-        if (!_canWipeLocalFiles) {
-            qCInfo(lcRemoteWipe) << "Deleting account" << _account->displayName();
-            // delete account if there was nothing else to wipe
-            manager->deleteAccount(accountState);
-            manager->save();
-        }
-    } else {
-        // ask user for his credentials again
+    _checkDeadline.stop();
+    _networkReplyCheck.clear();
+    reply->deleteLater();
+    const auto accountState = currentAccountState();
+    if (!accountState || _account->url() != _checkUrl || _account->id() != _checkAccountId || _account->davUser() != _checkDavUser) {
+        return;
+    }
+    auto parseError = QJsonParseError{};
+    const auto document = QJsonDocument::fromJson(reply->readAll(), &parseError);
+    const auto wipeValue = document.object().value(QStringLiteral("wipe"));
+    const auto wipe = reply->error() == QNetworkReply::NoError && reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200
+        && parseError.error == QJsonParseError::NoError && document.isObject() && wipeValue.isBool() && wipeValue.toBool();
+    if (!wipe) {
+        _appPassword.clear();
         accountState->handleInvalidCredentials();
+        return;
     }
-
-    _networkReplyCheck->deleteLater();
+    _wipeAuthorized = true;
+    _account->setRemoteWipeRequested_HACK();
+    Q_EMIT authorized(accountState.data());
+    if (!_canWipeLocalFiles) {
+        slotWipeDone(accountState.data(), true);
+    }
 }
 
 void RemoteWipe::slotWipeDone(AccountState *accountState, bool dataWiped)
 {
-    const bool isCurrentAccount = _account == accountState->account();
-    if (!(dataWiped && isCurrentAccount)) {
-        qCWarning(lcRemoteWipe).nospace() << "will not notify server about wipe success dataWiped=" << dataWiped << " isCurrentAccount=" << isCurrentAccount;
+    const auto current = currentAccountState();
+    if (!_wipeAuthorized || _wipeCompleted || !dataWiped || !current || current.data() != accountState) {
         return;
     }
-
-    // delete account after wiping local data succeeded
-    // sending the notification to the server will be done after the account got removed
-    qCInfo(lcRemoteWipe) << "Deleting account" << _account->displayName();
-    auto manager = AccountManager::instance();
+    auto *manager = AccountManager::instance();
     manager->deleteAccount(accountState);
     manager->save();
+    _wipeCompleted = true;
+    notifyServerSuccess();
 }
 
 void RemoteWipe::notifyServerSuccess()
 {
-    qCInfo(lcRemoteWipe) << "Notifying server about successful remote wipe for" << _account->displayName();
-    QUrl requestUrl = Utility::concatUrlPath(_account->url().toString(),
-                                                QLatin1String("/index.php/core/wipe/success"));
-    QNetworkRequest request;
-    request.setHeader(QNetworkRequest::ContentTypeHeader,
-                        "application/x-www-form-urlencoded");
-    request.setUrl(requestUrl);
-    request.setSslConfiguration(_account->getOrCreateSslConfig());
-    auto requestBody = new QBuffer;
-    QUrlQuery arguments(QStringLiteral("token=%1").arg(_appPassword));
-    requestBody->setData(arguments.query(QUrl::FullyEncoded).toLatin1());
-    _networkReplySuccess = _networkManager->post(request, requestBody);
-    QObject::connect(_networkReplySuccess, &QNetworkReply::finished, this,
-                        &RemoteWipe::slotNotifyServerSuccessFinished);
+    if (!_wipeCompleted || _networkReplySuccess || _acknowledged) {
+        return;
+    }
+    auto *reply = postToken(QStringLiteral("/index.php/core/wipe/success"));
+    _networkReplySuccess = reply;
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        slotNotifyServerSuccessFinished(reply);
+    });
+    _successDeadline.start();
 }
 
-void RemoteWipe::slotNotifyServerSuccessFinished()
+void RemoteWipe::slotNotifyServerSuccessFinished(QNetworkReply *reply)
 {
-    auto jsonData = _networkReplySuccess->readAll();
-    QJsonParseError jsonParseError{};
-    QJsonObject json = QJsonDocument::fromJson(jsonData, &jsonParseError).object();
-    if (_networkReplySuccess->error() != QNetworkReply::NoError ||
-            jsonParseError.error != QJsonParseError::NoError) {
-        QString errorFromJson = json["error"].toString();
-        if (!errorFromJson.isEmpty()) {
-            qCWarning(lcRemoteWipe) << QStringLiteral("Error returned from the server: <em>%1</em>")
-                              .arg(errorFromJson.toHtmlEscaped());
-        } else if (_networkReplySuccess->error() != QNetworkReply::NoError) {
-            qCWarning(lcRemoteWipe) << QStringLiteral("There was an error accessing the 'success' endpoint: <br><em>%1</em>")
-                              .arg(_networkReplySuccess->errorString().toHtmlEscaped());
-        } else if (jsonParseError.error != QJsonParseError::NoError) {
-            qCWarning(lcRemoteWipe) << QStringLiteral("Could not parse the JSON returned from the server: <br><em>%1</em>")
-                              .arg(jsonParseError.errorString());
-        } else {
-            qCWarning(lcRemoteWipe) << QStringLiteral("The reply from the server did not contain all expected fields.");
-        }
+    if (_networkReplySuccess != reply) {
+        return;
     }
-
-    _networkReplySuccess->deleteLater();
+    _successDeadline.stop();
+    _networkReplySuccess.clear();
+    reply->deleteLater();
+    _acknowledged = reply->error() == QNetworkReply::NoError && reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200;
+    if (_acknowledged) {
+        _appPassword.clear();
+    } else {
+        qCWarning(lcRemoteWipe) << "Remote wipe completion notification failed";
+    }
 }
 }

@@ -146,12 +146,13 @@ QString Theme::statusHeaderText(SyncResult::Status status) const
 
 bool Theme::isBranded() const
 {
-    return (appNameGUI() != QStringLiteral("Nextcloud") && NEXTCLOUD_DEV == 0);
+    // This controls settings migration. A display-label change is not a new identity.
+    return (QStringLiteral(APPLICATION_NAME) != QStringLiteral("Nextcloud") && NEXTCLOUD_DEV == 0);
 }
 
 QString Theme::appNameGUI() const
 {
-    return APPLICATION_NAME;
+    return APPLICATION_DISPLAY_NAME;
 }
 
 QString Theme::appName() const
@@ -463,13 +464,16 @@ Theme::Theme()
 #endif
 #ifdef APPLICATION_SERVER_URL
     setOverrideServerUrl(QString::fromUtf8(APPLICATION_SERVER_URL));
+#ifdef APPLICATION_SERVER_URL_ENFORCE
+    _startLoginFlowAutomatically = true;
+#endif
 #endif
 }
 
 QString Theme::developerStringInfo() const
 {
     const auto devString = QString(tr("%1 Desktop Client Version %2", "%1 is application name. %2 is the human version string."))
-    .arg(APPLICATION_NAME, QString::fromLatin1(MIRALL_HUMAN_VERSION_STRING));
+                               .arg(appNameGUI(), QString::fromLatin1(MIRALL_HUMAN_VERSION_STRING));
     return devString;
 }
 
@@ -612,18 +616,17 @@ QString Theme::updateCheckUrl() const
 
 qint64 Theme::newBigFolderSizeLimit() const
 {
-    // Default to 500MB
-    return 500;
+    return -1;
 }
 
 bool Theme::wizardHideExternalStorageConfirmationCheckbox() const
 {
-    return false;
+    return true;
 }
 
 bool Theme::wizardHideFolderSizeLimitCheckbox() const
 {
-    return false;
+    return true;
 }
 
 QString Theme::gitSHA1() const
@@ -672,8 +675,7 @@ QString Theme::aboutDetails() const
     QString devString;
     devString = developerStringInfo();
 
-    devString += tr("<p>This release was supplied by %1.</p>")
-              .arg(APPLICATION_VENDOR);
+    devString += tr("<p>This release was supplied by %1.</p>").arg(APPLICATION_DISPLAY_VENDOR);
 
     devString += gitSHA1();
 
@@ -914,9 +916,7 @@ QString Theme::versionSwitchOutput() const
 {
     QString helpText;
     QTextStream stream(&helpText);
-    stream << appName()
-           << QLatin1String(" version ")
-           << version() << Qt::endl;
+    stream << appNameGUI() << QLatin1String(" version ") << version() << Qt::endl;
 #ifdef GIT_SHA1
     stream << "Git revision " << GIT_SHA1 << Qt::endl;
 #endif

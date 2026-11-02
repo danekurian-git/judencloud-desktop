@@ -6,6 +6,7 @@
 
 #include "configfile.h"
 
+#include "account.h"
 #include "common/asserts.h"
 #include "common/utility.h"
 #include "config.h"
@@ -138,7 +139,7 @@ bool copy_dir_recursive(QString from_dir, QString to_dir)
 ConfigFile::ConfigFile()
 {
     // QDesktopServices uses the application name to create a config path
-    qApp->setApplicationName(Theme::instance()->appNameGUI());
+    qApp->setApplicationName(QStringLiteral(APPLICATION_NAME));
 
     QSettings::setDefaultFormat(QSettings::IniFormat);
 
@@ -329,7 +330,7 @@ void ConfigFile::restoreGeometryHeader(QHeaderView *header)
 QVariant ConfigFile::getPolicySetting(const QString &setting, const QVariant &defaultValue) const
 {
     if (Utility::isWindows()) {
-        const auto appName = Migration::isUnbrandedToBrandedMigration() ? unbrandedAppName : Theme::instance()->appNameGUI();
+        const auto appName = Migration::isUnbrandedToBrandedMigration() ? unbrandedAppName : QStringLiteral(APPLICATION_NAME);
         // check for policies first and return immediately if a value is found.
         QSettings userPolicy(QString::fromLatin1(R"(HKEY_CURRENT_USER\Software\Policies\%1\%2)").arg(APPLICATION_VENDOR, appName),
             QSettings::NativeFormat);
@@ -816,12 +817,18 @@ void ConfigFile::setUpdateChannel(const QString &channel)
 
 [[nodiscard]] QString ConfigFile::overrideServerUrl() const
 {
+    if (const auto enforcedUrl = Account::enforcedServerUrl(); !enforcedUrl.isEmpty()) {
+        return enforcedUrl.toString();
+    }
     QSettings settings(configFile(), QSettings::IniFormat);
     return settings.value(QLatin1String(overrideServerUrlC), {}).toString();
 }
 
 void ConfigFile::setOverrideServerUrl(const QString &url)
 {
+    if (!Account::enforcedServerUrl().isEmpty()) {
+        return;
+    }
     QSettings settings(configFile(), QSettings::IniFormat);
     settings.setValue(QLatin1String(overrideServerUrlC), url);
 }
@@ -889,7 +896,7 @@ QVariant ConfigFile::getValue(const QString &param, const QString &group,
     const QVariant &defaultValue) const
 {
     QVariant systemSetting;
-    const auto appName = Migration::isUnbrandedToBrandedMigration() ? unbrandedAppName : Theme::instance()->appNameGUI();
+    const auto appName = Migration::isUnbrandedToBrandedMigration() ? unbrandedAppName : QStringLiteral(APPLICATION_NAME);
     if (Utility::isMac()) {
         QSettings systemSettings(QLatin1String("/Library/Preferences/" APPLICATION_REV_DOMAIN ".plist"), QSettings::NativeFormat);
         if (!group.isEmpty()) {
@@ -1028,11 +1035,7 @@ void ConfigFile::setDownloadLimit(int kbytes)
 
 QPair<bool, qint64> ConfigFile::newBigFolderSizeLimit() const
 {
-    auto defaultValue = Theme::instance()->newBigFolderSizeLimit();
-    const auto fallback = getValue(newBigFolderSizeLimitC, QString(), defaultValue).toLongLong();
-    const auto value = getPolicySetting(QLatin1String(newBigFolderSizeLimitC), fallback).toLongLong();
-    const bool use = value >= 0 && useNewBigFolderSizeLimit();
-    return qMakePair(use, qMax<qint64>(0, value));
+    return {false, 0};
 }
 
 void ConfigFile::setNewBigFolderSizeLimit(bool isChecked, qint64 mbytes)
@@ -1043,20 +1046,17 @@ void ConfigFile::setNewBigFolderSizeLimit(bool isChecked, qint64 mbytes)
 
 bool ConfigFile::confirmExternalStorage() const
 {
-    const auto fallback = getValue(confirmExternalStorageC, QString(), true);
-    return getPolicySetting(QLatin1String(confirmExternalStorageC), fallback).toBool();
+    return false;
 }
 
 bool ConfigFile::useNewBigFolderSizeLimit() const
 {
-    const auto fallback = getValue(useNewBigFolderSizeLimitC, QString(), true);
-    return getPolicySetting(QLatin1String(useNewBigFolderSizeLimitC), fallback).toBool();
+    return false;
 }
 
 bool ConfigFile::notifyExistingFoldersOverLimit() const
 {
-    const auto fallback = getValue(notifyExistingFoldersOverLimitC, {}, false);
-    return getPolicySetting(QString(notifyExistingFoldersOverLimitC), fallback).toBool();
+    return false;
 }
 
 void ConfigFile::setNotifyExistingFoldersOverLimit(const bool notify)
@@ -1066,9 +1066,7 @@ void ConfigFile::setNotifyExistingFoldersOverLimit(const bool notify)
 
 bool ConfigFile::stopSyncingExistingFoldersOverLimit() const
 {
-    const auto notifyExistingBigEnabled = notifyExistingFoldersOverLimit();
-    const auto fallback = getValue(stopSyncingExistingFoldersOverLimitC, {}, notifyExistingBigEnabled);
-    return getPolicySetting(QString(stopSyncingExistingFoldersOverLimitC), fallback).toBool();
+    return false;
 }
 
 void ConfigFile::setStopSyncingExistingFoldersOverLimit(const bool stopSyncing)

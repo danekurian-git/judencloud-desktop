@@ -18,6 +18,8 @@
 #include <QBuffer>
 #include <QUrlQuery>
 
+#include <functional>
+
 class QUrl;
 class QJsonObject;
 class QJsonDocument;
@@ -201,6 +203,10 @@ public:
      */
     void setProperties(QList<QByteArray> properties);
     [[nodiscard]] QList<QByteArray> properties() const;
+    void setIgnoreUnavailableProperties(bool ignore)
+    {
+        _ignoreUnavailableProperties = ignore;
+    }
 
 Q_SIGNALS:
     void result(const QVariantMap &values);
@@ -210,12 +216,17 @@ private Q_SLOTS:
     bool finished() override;
 
 private:
-    static QVariantMap processPropfindDomDocument(const QDomDocument &domDocument);
+    static QVariantMap processPropfindDomDocument(const QDomDocument &domDocument, bool ignoreUnavailableProperties);
     static QStringList processTagsInPropfindDomDocument(const QDomDocument &domDocument);
     static QVariantList processSystemTagsInPropfindDomDocument(const QDomDocument &domDocument);
 
+    bool _ignoreUnavailableProperties = false;
     QList<QByteArray> _properties;
 };
+
+/** Query current storage classification before downloading an existing placeholder.
+ * A failed query or missing classification does not permit the transfer. */
+OWNCLOUDSYNC_EXPORT void checkRemoteStorageAllowed(const AccountPtr &account, const QString &path, QObject *context, const std::function<void(bool)> &callback);
 
 #ifndef TOKEN_AUTH_ONLY
 /**

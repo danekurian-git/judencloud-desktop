@@ -8,6 +8,8 @@
 
 #include "owncloudpropagator.h"
 #include <QFile>
+#include <QFutureWatcher>
+#include <atomic>
 
 namespace OCC {
 
@@ -45,6 +47,13 @@ public:
     {
     }
 
+    ~PropagateLocalRemove() override;
+    void abort(PropagatorJob::AbortType abortType) override;
+    [[nodiscard]] JobParallelism parallelism() const override
+    {
+        return WaitForFinished;
+    }
+
     void willDeleteItemToClientTrashBin(const QString &itemFilePath)
     {
         _deleteToClientTrashBin.insert(itemFilePath);
@@ -53,8 +62,38 @@ public:
     void start() override;
 
 private:
-    bool removeRecursively(const QString &path);
+    struct PendingLocalFileOperation {
+        PendingLocalFileOperation();
+        ~PendingLocalFileOperation();
+    };
 
+    struct RemovalResult {
+        bool success = false;
+        bool nameClash = false;
+        QString error;
+        QList<QPair<QString, bool>> deleted;
+    };
+
+    static RemovalResult removeRecursively(const QString &absolute,
+                                           const QString &syncRoot,
+                                           const QSet<QString> &deleteToClientTrashBin,
+                                           const std::shared_ptr<std::atomic_bool> &cancelled);
+    static RemovalResult removeLocalItem(const QString &filename,
+                                         const QString &relativePath,
+                                         const QString &syncRoot,
+                                         bool isDirectory,
+                                         bool moveToTrash,
+                                         bool allowTrash,
+                                         const QSet<QString> &deleteToClientTrashBin,
+                                         const std::shared_ptr<std::atomic_bool> &cancelled);
+    bool updateJournalAfterRemoval(const RemovalResult &result, bool aborted = false);
+    void startAsyncRemoval(const QString &filename);
+    void completeRemoval();
+
+    QFutureWatcher<RemovalResult> *_removalWatcher = nullptr;
+    std::shared_ptr<PendingLocalFileOperation> _pendingLocalFileOperation;
+    const std::shared_ptr<std::atomic_bool> _cancelled = std::make_shared<std::atomic_bool>(false);
+    bool _abortPending = false;
     QSet<QString> _deleteToClientTrashBin;
 
     bool _moveToTrash = false;

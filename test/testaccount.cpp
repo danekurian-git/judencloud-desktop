@@ -16,6 +16,10 @@
 #include "accountstate.h"
 #include "logger.h"
 #include "syncenginetestutils.h"
+#include <QScopeGuard>
+#include <QSettings>
+#include "configfile.h"
+#include "theme.h"
 
 using namespace OCC;
 using namespace Qt::StringLiterals;
@@ -37,6 +41,218 @@ private Q_SLOTS:
     {
         AccountPtr account = Account::create();
         [[maybe_unused]] const auto davPath = account->davPath();
+    }
+
+    void testAppPasswordUsesCanonicalIdentity()
+    {
+        const auto account = Account::create();
+        account->_id = QStringLiteral("remote-wipe-unit-test");
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl()));
+        auto *credentials = new FakeCredentials(new FakeQNAM({}));
+        credentials->setUserName(QStringLiteral("login-alias"));
+        account->setCredentials(credentials);
+        account->setDavUser(QStringLiteral("canonical-user-id"));
+        const auto canonicalKey = AbstractCredentials::keychainKey(account->url().toString(), QStringLiteral("canonical-user-id_app-password"), account->id());
+        const auto legacyKey = AbstractCredentials::keychainKey(account->url().toString(), QStringLiteral("login-alias_app-password"), account->id());
+        auto store = QHash<QString, QByteArray>{};
+        auto operations = QStringList{};
+        account->_appPasswordStoreOverride = [&store, &operations](Account::AppPasswordOperation op, const QString &key, const QByteArray &data, Account::AppPasswordCallback callback) {
+            operations.append(key);
+            if (op == Account::AppPasswordOperation::Write) {
+                store.insert(key, data);
+                callback(Account::AppPasswordResult::Success, {});
+            } else if (op == Account::AppPasswordOperation::Delete) {
+                store.remove(key);
+                callback(Account::AppPasswordResult::Success, {});
+            } else {
+                callback(store.contains(key) ? Account::AppPasswordResult::Success : Account::AppPasswordResult::Missing, store.value(key));
+            }
+        };
+        auto retrieved = QSignalSpy(account.data(), &Account::appPasswordRetrieved);
+        account->writeAppPasswordOnce(QStringLiteral("synthetic-token"));
+        account->writeAppPasswordOnce(QStringLiteral("must-not-overwrite"));
+        QCOMPARE(store.value(canonicalKey), QByteArrayLiteral("synthetic-token"));
+        QVERIFY(!store.contains(legacyKey));
+        account->retrieveAppPassword();
+        QCOMPARE(retrieved.takeFirst().at(0).toString(), QStringLiteral("synthetic-token"));
+        QCOMPARE(operations, QStringList({canonicalKey, canonicalKey}));
+
+        // Older alias-keyed entries are tried only when the canonical entry is absent.
+        store.remove(canonicalKey);
+        store.insert(legacyKey, QByteArrayLiteral("legacy-token"));
+        operations.clear();
+        account->retrieveAppPassword();
+        QCOMPARE(retrieved.takeFirst().at(0).toString(), QStringLiteral("legacy-token"));
+        QCOMPARE(operations, QStringList({canonicalKey, legacyKey}));
+        store.insert(canonicalKey, QByteArrayLiteral("current-token"));
+        account->deleteAppPassword();
+        QVERIFY(store.isEmpty());
+        account->writeAppPasswordOnce(QStringLiteral("replacement-token"));
+        QCOMPARE(store.value(canonicalKey), QByteArrayLiteral("replacement-token"));
+    }
+
+    void testAppPasswordReadFailures_data()
+    {
+        QTest::addColumn<bool>("missing");
+        QTest::newRow("unavailable-keychain") << false;
+        QTest::newRow("missing-token") << true;
+    }
+
+    void testAppPasswordReadFailures()
+    {
+        QFETCH(bool, missing);
+        const auto account = Account::create();
+        account->_id = QStringLiteral("remote-wipe-unit-test");
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl()));
+        account->setCredentials(new FakeCredentials(new FakeQNAM({})));
+        account->setDavUser(QStringLiteral("canonical-user-id"));
+        auto reads = 0;
+        account->_appPasswordStoreOverride = [&reads, missing](Account::AppPasswordOperation op, const QString &, const QByteArray &, Account::AppPasswordCallback callback) {
+            QCOMPARE(op, Account::AppPasswordOperation::Read);
+            ++reads;
+            callback(missing ? Account::AppPasswordResult::Missing : Account::AppPasswordResult::Error, {});
+        };
+        auto retrieved = QSignalSpy(account.data(), &Account::appPasswordRetrieved);
+        account->retrieveAppPassword();
+        QCOMPARE(retrieved.count(), 1);
+        QVERIFY(retrieved.at(0).at(0).toString().isEmpty());
+        QCOMPARE(reads, missing ? 2 : 1);
+    }
+
+    void testAppPasswordReadCannotCrossAccountChange()
+    {
+        const auto account = Account::create();
+        account->_id = QStringLiteral("remote-wipe-unit-test");
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl()));
+        account->setCredentials(new FakeCredentials(new FakeQNAM({})));
+        account->setDavUser(QStringLiteral("first-user"));
+        auto pending = Account::AppPasswordCallback{};
+        account->_appPasswordStoreOverride = [&pending](Account::AppPasswordOperation, const QString &, const QByteArray &, Account::AppPasswordCallback callback) {
+            pending = std::move(callback);
+        };
+        auto retrieved = QSignalSpy(account.data(), &Account::appPasswordRetrieved);
+        account->retrieveAppPassword();
+        QVERIFY(pending);
+        account->setDavUser(QStringLiteral("second-user"));
+        pending(Account::AppPasswordResult::Success, QByteArrayLiteral("first-users-token"));
+        QCOMPARE(retrieved.count(), 1);
+        QVERIFY(retrieved.at(0).at(0).toString().isEmpty());
+    }
+
+    void testExplicitSignOutStaysSignedOutWhileDisconnected()
+    {
+        const auto account = Account::create();
+        QVERIFY(account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("https://cloud.example")) : Account::enforcedServerUrl()));
+        account->setCredentials(new FakeCredentials(new FakeQNAM({})));
+        AccountState state(account);
+        QCOMPARE(state.state(), AccountState::Disconnected);
+        state.signOutByUi();
+        QCOMPARE(state.state(), AccountState::SignedOut);
+        QCoreApplication::processEvents();
+        QCOMPARE(state.state(), AccountState::SignedOut);
+    }
+
+    void testAccount_serverRestriction_data()
+    {
+        QTest::addColumn<QUrl>("url");
+        QTest::addColumn<bool>("allowedWhenEnforced");
+
+        auto base = Account::enforcedServerUrl();
+        if (base.isEmpty()) {
+            base = QUrl(QStringLiteral("https://cloud.monocloud.online"));
+        }
+        QTest::newRow("compiled-server") << base << true;
+        auto candidate = base;
+        candidate.setPath(base.path() + QLatin1Char('/'));
+        QTest::newRow("trailing-slash") << candidate << true;
+        candidate = base;
+        candidate.setPort(443);
+        QTest::newRow("default-port") << candidate << true;
+        candidate = base;
+        candidate.setHost(base.host().toUpper());
+        QTest::newRow("host-case") << candidate << true;
+        candidate = base;
+        candidate.setHost(QStringLiteral("unconfigured.example.com"));
+        QTest::newRow("other-host") << candidate << false;
+        candidate = base;
+        candidate.setHost(base.host() + QStringLiteral(".example.com"));
+        QTest::newRow("host-suffix") << candidate << false;
+        candidate = base;
+        candidate.setScheme(QStringLiteral("http"));
+        QTest::newRow("http") << candidate << false;
+        candidate = base;
+        candidate.setPort(8443);
+        QTest::newRow("other-port") << candidate << false;
+        candidate = base;
+        candidate.setPath(QStringLiteral("/other-server"));
+        QTest::newRow("other-base-path") << candidate << false;
+        candidate = base;
+        candidate.setUserName(QStringLiteral("user"));
+        QTest::newRow("userinfo") << candidate << false;
+        candidate = base;
+        candidate.setQuery(QStringLiteral("server=other"));
+        QTest::newRow("query") << candidate << false;
+        candidate = base;
+        candidate.setFragment(QStringLiteral("other"));
+        QTest::newRow("fragment") << candidate << false;
+        QTest::newRow("relative") << QUrl(QStringLiteral("/other-server")) << false;
+        QTest::newRow("empty") << QUrl{} << false;
+    }
+
+    void testAccount_serverRestriction()
+    {
+        QFETCH(QUrl, url);
+        QFETCH(bool, allowedWhenEnforced);
+
+        const auto allowed = Account::enforcedServerUrl().isEmpty() || allowedWhenEnforced;
+        const auto account = Account::create();
+        QCOMPARE(Account::isServerUrlAllowed(url), allowed);
+        QCOMPARE(account->setUrl(url), allowed);
+        QCOMPARE(account->url(), allowed ? url : QUrl{});
+    }
+
+    void testAccount_serverRestrictionPreservesExistingUrl()
+    {
+        const auto account = Account::create();
+        const auto enforcedUrl = Account::enforcedServerUrl();
+        const auto initialUrl = enforcedUrl.isEmpty() ? QUrl(QStringLiteral("https://initial.example.com")) : enforcedUrl;
+        const auto otherUrl = QUrl(QStringLiteral("https://unconfigured.example.com"));
+        QVERIFY(account->setUrl(initialUrl));
+
+        QCOMPARE(account->setUrl(otherUrl), enforcedUrl.isEmpty());
+        QCOMPARE(account->url(), enforcedUrl.isEmpty() ? otherUrl : initialUrl);
+    }
+
+    void testAccount_compiledServerRestrictionIgnoresRuntimeOverrides()
+    {
+        const auto enforcedUrl = Account::enforcedServerUrl();
+        if (enforcedUrl.isEmpty()) {
+            QSKIP("This test requires a compiled server restriction.");
+        }
+
+        auto config = ConfigFile{};
+        auto settings = QSettings(config.configFile(), QSettings::IniFormat);
+        const auto previousSetting = settings.value(QStringLiteral("overrideServerUrl"));
+        const auto theme = Theme::instance();
+        const auto previousThemeUrl = theme->overrideServerUrl();
+        const auto restore = qScopeGuard([&settings, previousSetting, theme, previousThemeUrl] {
+            if (previousSetting.isValid()) {
+                settings.setValue(QStringLiteral("overrideServerUrl"), previousSetting);
+            } else {
+                settings.remove(QStringLiteral("overrideServerUrl"));
+            }
+            settings.sync();
+            theme->setOverrideServerUrl(previousThemeUrl);
+        });
+        const auto otherUrl = QStringLiteral("https://unconfigured.example.com");
+        settings.setValue(QStringLiteral("overrideServerUrl"), otherUrl);
+        settings.sync();
+        theme->setOverrideServerUrl(otherUrl);
+        config.setOverrideServerUrl(otherUrl);
+
+        QCOMPARE(config.overrideServerUrl(), enforcedUrl.toString());
+        QVERIFY(!Account::isServerUrlAllowed(QUrl(otherUrl)));
+        QVERIFY(Account::isServerUrlAllowed(enforcedUrl));
     }
 
     void testAccount_isPublicShareLink_data()
@@ -97,6 +313,39 @@ private Q_SLOTS:
         // changing it to LegacyGlobalLimit (-2) should fall back to NoLimit
         setLimitSettings(LimitSetting::LegacyGlobalLimit);
         verifyLimitSettings(LimitSetting::NoLimit);
+    }
+
+    void testExternalStoragePlaceholders_data()
+    {
+        QTest::addColumn<QString>("mountType");
+        QTest::addColumn<QString>("subPath");
+        QTest::addColumn<QStringList>("expectedPaths");
+        QTest::newRow("external entry") << QStringLiteral("external") << QString{} << QStringList{"B", "C", "S"};
+        QTest::newRow("external root") << QStringLiteral("external") << QStringLiteral("A/") << QStringList{};
+        QTest::newRow("external-session root") << QStringLiteral("external-session") << QStringLiteral("A/") << QStringList{};
+        QTest::newRow("group root") << QStringLiteral("group") << QStringLiteral("A/") << QStringList{"A/a1", "A/a2"};
+        QTest::newRow("shared root") << QStringLiteral("shared") << QStringLiteral("A/") << QStringList{"A/a1", "A/a2"};
+    }
+
+    void testExternalStoragePlaceholders()
+    {
+        QFETCH(QString, mountType);
+        QFETCH(QString, subPath);
+        QFETCH(QStringList, expectedPaths);
+        FakeFolder folder{FileInfo::A12_B12_C12_S12()};
+        folder.remoteModifier().find("A")->extraDavProperties = QStringLiteral("<nc:mount-type>%1</nc:mount-type>").arg(mountType).toUtf8();
+        folder.syncJournal().clearFileTable();
+        auto promise = QPromise<OCC::PlaceholderCreateInfo>{};
+        const auto future = promise.future();
+        folder.account()->listRemoteFolder(&promise, {}, subPath, &folder.syncJournal());
+        QTRY_VERIFY(future.isFinished());
+        QStringList paths;
+        for (const auto &placeholder : future.results()) {
+            paths.append(placeholder.fullPath);
+        }
+        paths.sort();
+        expectedPaths.sort();
+        QCOMPARE(paths, expectedPaths);
     }
 
     void testAccount_listRemoteFolder_data()

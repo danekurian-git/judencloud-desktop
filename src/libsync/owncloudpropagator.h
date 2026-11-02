@@ -514,6 +514,7 @@ public:
      * in filesystems that are only case-preserving.
      */
     bool localFileNameClash(const QString &relfile);
+    static bool localFileNameClash(const QString &localDir, const QString &relfile);
 
     /** Check whether a file is properly accessible for upload.
      *
@@ -541,6 +542,9 @@ public:
     /** Creates the job for an item.
      */
     PropagateItemJob *createJob(const SyncFileItemPtr &item);
+
+    // Includes native operations that outlive a forcibly aborted propagation job.
+    [[nodiscard]] static bool hasPendingLocalFileOperations();
 
     void scheduleNextJob();
     void reportProgress(const SyncFileItem &, qint64 bytes);
@@ -649,22 +653,48 @@ public:
 private Q_SLOTS:
     void abortTimeout()
     {
+        if (_finishedEmited) {
+            return;
+        }
+        if (hasPendingLocalFileOperations()) {
+            QTimer::singleShot(nativeOperationPollInterval, this, &OwncloudPropagator::abortTimeout);
+            return;
+        }
         // Abort synchronously and finish
-        _rootJob.data()->abort(PropagatorJob::AbortType::Synchronous);
+        if (_rootJob) {
+            _rootJob.data()->abort(PropagatorJob::AbortType::Synchronous);
+        }
         emitFinished(SyncFileItem::NormalError);
     }
 
     /** Emit the finished signal and make sure it is only emitted once */
     void emitFinished(OCC::SyncFileItem::Status status)
     {
-        if (!_finishedEmited) {
-            Q_EMIT finished(status);
+        if (_finishedEmited) {
+            return;
+        }
+        // A directory's first job can be detached by synchronous abort. Do not
+        // allow a replacement sync to race with its outstanding native operation.
+        if (hasPendingLocalFileOperations()) {
+            if (!_finishDeferred) {
+                _finishDeferred = true;
+                QTimer::singleShot(nativeOperationPollInterval, this, [this, status] {
+                    _finishDeferred = false;
+                    emitFinished(status);
+                });
+            }
+            return;
         }
         _abortRequested = false;
         _finishedEmited = true;
+        Q_EMIT finished(status);
     }
 
     void scheduleNextJobImpl();
+
+private:
+    static constexpr int nativeOperationPollInterval = 100;
+    bool _finishDeferred = false;
 
 Q_SIGNALS:
     void newItem(const OCC::SyncFileItemPtr &);

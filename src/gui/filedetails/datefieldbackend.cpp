@@ -121,7 +121,7 @@ void DateFieldBackend::setMinimumDateMsecs(const qint64 minimumDateMsecs)
         return;
     }
 
-    const auto dt = QDateTime::fromMSecsSinceEpoch(minimumDateMsecs);
+    const auto dt = QDateTime::fromMSecsSinceEpoch(minimumDateMsecs).toUTC();
     setMinimumDate(dt.date());
 }
 
@@ -153,7 +153,7 @@ void DateFieldBackend::setMaximumDateMsecs(const qint64 maximumDateMsecs)
         return;
     }
 
-    const auto dt = QDateTime::fromMSecsSinceEpoch(maximumDateMsecs);
+    const auto dt = QDateTime::fromMSecsSinceEpoch(maximumDateMsecs).toUTC();
     setMaximumDate(dt.date());
 }
 

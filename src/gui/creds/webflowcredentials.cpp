@@ -9,6 +9,8 @@
 #include "creds/keychainchunk.h"
 #include "accessmanager.h"
 #include "account.h"
+#include "privateclouddrive.h"
+#include "creds/privatecloudcredentialsdialog.h"
 #include "configfile.h"
 #include "theme.h"
 #include "wizard/browserreauthwindow.h"
@@ -142,6 +144,33 @@ void WebFlowCredentials::fetchFromKeychain(const QString &appName) {
 }
 
 void WebFlowCredentials::askFromUser() {
+    if (PrivateCloudDrive::isEnabled()) {
+        if (_privateCloudDialog) {
+            _privateCloudDialog->show();
+            _privateCloudDialog->raise();
+            _privateCloudDialog->activateWindow();
+            return;
+        }
+        auto *dialog = new PrivateCloudCredentialsDialog(_account);
+        _privateCloudDialog = dialog;
+        connect(this, &QObject::destroyed, dialog, &QObject::deleteLater);
+        connect(dialog, &PrivateCloudCredentialsDialog::credentialsReady, this, [this](const QString &user, const QString &password) {
+            _privateCloudDialog.clear();
+            _user = user;
+            _password = password;
+            _ready = true;
+            _credentialsValid = true;
+            persist();
+            Q_EMIT asked();
+        });
+        connect(dialog, &QDialog::rejected, this, [this] {
+            _privateCloudDialog.clear();
+            Q_EMIT asked();
+        });
+        dialog->show();
+        return;
+    }
+
     if (_reAuthWindow) {
         _reAuthWindow->show();
         return;

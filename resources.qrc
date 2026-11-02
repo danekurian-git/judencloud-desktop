@@ -53,6 +53,7 @@
         <file>src/gui/wizard/qml/BrowserReAuthWindow.qml</file>
         <file>src/gui/wizard/qml/ClientCertificateDialog.qml</file>
         <file>src/gui/wizard/qml/OptionRow.qml</file>
+        <file>src/gui/wizard/qml/PrivateCloudFolderPage.qml</file>
         <file>src/gui/wizard/qml/ProxySettingsDialog.qml</file>
         <file>src/gui/wizard/qml/ServerPage.qml</file>
         <file>src/gui/wizard/qml/SyncOptionsPage.qml</file>

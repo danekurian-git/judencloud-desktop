@@ -5,12 +5,16 @@
 
 #include <QTest>
 
-#include "theme.h"
-#include "themeutils.h"
+#include "config.h"
+#include "configfile.h"
 #include "iconutils.h"
 #include "logger.h"
+#include "privateclouddrive.h"
+#include "theme.h"
+#include "themeutils.h"
 
 #include <QStandardPaths>
+#include <QTemporaryDir>
 
 class TestTheme : public QObject
 {
@@ -30,6 +34,28 @@ private Q_SLOTS:
         OCC::Logger::instance()->setLogDebug(true);
 
         QStandardPaths::setTestModeEnabled(true);
+    }
+
+    void testDisplayNamePreservesPersistentIdentity()
+    {
+        const auto theme = OCC::Theme::instance();
+        QCOMPARE(theme->appNameGUI(), QStringLiteral(APPLICATION_DISPLAY_NAME));
+        QCOMPARE(theme->appName(), QStringLiteral(APPLICATION_SHORTNAME));
+        QCOMPARE(theme->isBranded(), QStringLiteral(APPLICATION_NAME) != QStringLiteral("Nextcloud") && NEXTCLOUD_DEV == 0);
+        QVERIFY(theme->about().startsWith(theme->appNameGUI()));
+        QVERIFY(theme->versionSwitchOutput().startsWith(theme->appNameGUI() + QStringLiteral(" version ")));
+        QVERIFY(theme->aboutDetails().contains(QStringLiteral(APPLICATION_DISPLAY_VENDOR)));
+        QTemporaryDir configuration;
+        QVERIFY(configuration.isValid());
+        QVERIFY(OCC::ConfigFile::setConfDir(configuration.path()));
+        const OCC::ConfigFile config;
+        Q_UNUSED(config)
+        QCOMPARE(QCoreApplication::applicationName(), QStringLiteral(APPLICATION_NAME));
+        if (OCC::PrivateCloudDrive::isEnabled()) {
+            QCOMPARE(theme->appNameGUI(), QStringLiteral("privateCloud"));
+            QCOMPARE(theme->appName(), QString::fromUtf8(NEXTCLOUD_DEV ? "NextcloudDev" : "Nextcloud"));
+            QCOMPARE(QStringLiteral(APPLICATION_CONFIG_NAME), QString::fromUtf8(NEXTCLOUD_DEV ? "nextclouddev" : "nextcloud"));
+        }
     }
 
     void testHidpiFileName_darkBackground_returnPathToWhiteIcon()

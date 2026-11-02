@@ -5,6 +5,7 @@
  */
 
 #include "account.h"
+#include "privatecloudtransport.h"
 #include "accessmanager.h"
 #include "accountfwd.h"
 #include "capabilities.h"
@@ -36,16 +37,16 @@
 #include <QNetworkCookieJar>
 #include <QNetworkProxy>
 
-#include <QFileInfo>
-#include <QDir>
-#include <QSslKey>
 #include <QAuthenticator>
-#include <QStandardPaths>
+#include <QDir>
+#include <QFileInfo>
+#include <QHttpMultiPart>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
 #include <QLoggingCategory>
-#include <QHttpMultiPart>
+#include <QSslKey>
+#include <QStandardPaths>
 
 #include <qsslconfiguration.h>
 
@@ -313,10 +314,16 @@ void Account::setCredentials(AbstractCredentials *cred)
     if (proxy.type() != QNetworkProxy::DefaultProxy) {
         _networkAccessManager->setProxy(proxy);
     }
+    PrivateCloudTransport::apply(_networkAccessManager.data());
     connect(_networkAccessManager.data(), &QNetworkAccessManager::sslErrors,
         this, &Account::slotHandleSslErrors);
     connect(_networkAccessManager.data(), &QNetworkAccessManager::proxyAuthenticationRequired,
-        this, &Account::proxyAuthenticationRequired);
+        this,
+            [this](const QNetworkProxy &proxy, QAuthenticator *authenticator) {
+                if (!PrivateCloudTransport::isRequired()) {
+                    Q_EMIT proxyAuthenticationRequired(proxy, authenticator);
+                }
+            });
     connect(_credentials.data(), &AbstractCredentials::fetched,
         this, &Account::slotCredentialsFetched);
     connect(_credentials.data(), &AbstractCredentials::asked,
@@ -451,10 +458,16 @@ void Account::resetNetworkAccessManager()
     _networkAccessManager->setCookieJar(jar); // takes ownership of the old cookie jar
     _networkAccessManager->setProxy(proxy);   // Remember proxy (issue #2108)
 
+    PrivateCloudTransport::apply(_networkAccessManager.data());
     connect(_networkAccessManager.data(), &QNetworkAccessManager::sslErrors,
         this, &Account::slotHandleSslErrors);
     connect(_networkAccessManager.data(), &QNetworkAccessManager::proxyAuthenticationRequired,
-        this, &Account::proxyAuthenticationRequired);
+        this,
+            [this](const QNetworkProxy &proxy, QAuthenticator *authenticator) {
+                if (!PrivateCloudTransport::isRequired()) {
+                    Q_EMIT proxyAuthenticationRequired(proxy, authenticator);
+                }
+            });
 }
 
 QNetworkAccessManager *Account::networkAccessManager() const
@@ -579,8 +592,49 @@ void Account::setSslErrorHandler(AbstractSslErrorHandler *handler)
     _sslErrorHandler.reset(handler);
 }
 
-void Account::setUrl(const QUrl &url)
+QUrl Account::enforcedServerUrl()
 {
+#if defined(APPLICATION_SERVER_URL_ENFORCE) && defined(APPLICATION_SERVER_URL)
+    return QUrl(QString::fromUtf8(APPLICATION_SERVER_URL));
+#else
+    return {};
+#endif
+}
+
+bool Account::isServerUrlAllowed(const QUrl &url)
+{
+#if defined(APPLICATION_SERVER_URL_ENFORCE) && defined(APPLICATION_SERVER_URL)
+    const auto expectedUrl = enforcedServerUrl();
+    if (!url.isValid() || url.isRelative() || url.scheme() != QStringLiteral("https") || url.host().isEmpty()
+        || url.authority(QUrl::FullyEncoded).contains(QLatin1Char('@')) || url.hasQuery() || url.hasFragment() || !expectedUrl.isValid()
+        || expectedUrl.scheme() != QStringLiteral("https")) {
+        return false;
+    }
+
+    const auto normalizedUrl = [](QUrl candidate) {
+        candidate = candidate.adjusted(QUrl::NormalizePathSegments | QUrl::StripTrailingSlash);
+        if (candidate.port() == 443) {
+            candidate.setPort(-1);
+        }
+        if (candidate.path() == QStringLiteral("/")) {
+            candidate.setPath({});
+        }
+        return candidate;
+    };
+    return normalizedUrl(url) == normalizedUrl(expectedUrl);
+#else
+    Q_UNUSED(url)
+    return true;
+#endif
+}
+
+bool Account::setUrl(const QUrl &url)
+{
+    if (!isServerUrlAllowed(url)) {
+        qCWarning(lcAccount) << "Rejected account URL outside the configured server restriction.";
+        return false;
+    }
+
     const QRegularExpression discoverPublicLinks(R"(((https|http)://[^/]*).*/s/([^/]*)$)");
     const auto isPublicLink = discoverPublicLinks.match(url.toString());
     if (isPublicLink.hasMatch()) {
@@ -594,6 +648,7 @@ void Account::setUrl(const QUrl &url)
     }
 
     _userVisibleUrl = url;
+    return true;
 }
 
 QUrl Account::publicShareLinkUrl() const
@@ -882,101 +937,108 @@ void Account::setServerVersion(const QString &version)
     Q_EMIT serverVersionChanged(sharedFromThis(), oldServerVersion, version);
 }
 
-void Account::writeAppPasswordOnce(const QString &appPassword)
+QStringList Account::appPasswordKeys() const
 {
-    if (_wroteAppPassword) { 
+    if (id().isEmpty() || url().isEmpty()) {
+        return {};
+    }
+    const auto loginUser = credentials() ? credentials()->user() : QString{};
+    const auto canonicalUser = davUser().isEmpty() ? loginUser : davUser();
+    if (canonicalUser.isEmpty()) {
+        return {};
+    }
+    auto keys = QStringList{AbstractCredentials::keychainKey(url().toString(), canonicalUser + app_password, id())};
+    if (!loginUser.isEmpty() && loginUser != canonicalUser) {
+        keys.append(AbstractCredentials::keychainKey(url().toString(), loginUser + app_password, id()));
+    }
+    return keys;
+}
+
+void Account::runAppPasswordJob(AppPasswordOperation operation, const QString &key, const QByteArray &data, AppPasswordCallback callback)
+{
+    if (_appPasswordStoreOverride) {
+        _appPasswordStoreOverride(operation, key, data, std::move(callback));
         return;
     }
-
-    // Fix: Password got written from Account Wizard, before finish.
-    // Only write the app password for a connected account, else
-    // there'll be a zombie keychain slot forever, never used again ;p
-    //
-    // Also don't write empty passwords (Log out -> Relaunch)
-    if (id().isEmpty() || appPassword.isEmpty()) {
-        return;
+    Job *job = nullptr;
+    switch (operation) {
+    case AppPasswordOperation::Read:
+        job = new ReadPasswordJob(Theme::instance()->appName(), this);
+        break;
+    case AppPasswordOperation::Write: {
+        auto *writeJob = new WritePasswordJob(Theme::instance()->appName(), this);
+        writeJob->setBinaryData(data);
+        job = writeJob;
+        break;
     }
-
-    const auto keychainKey = AbstractCredentials::keychainKey(
-                url().toString(),
-                davUser() + app_password,
-                id()
-    );
-
-    auto job = new WritePasswordJob(Theme::instance()->appName());
+    case AppPasswordOperation::Delete:
+        job = new DeletePasswordJob(Theme::instance()->appName(), this);
+        break;
+    }
     job->setInsecureFallback(false);
-    job->setKey(keychainKey);
-    job->setBinaryData(appPassword.toLatin1());
-    connect(job, &WritePasswordJob::finished, [this](Job *incoming) {
-        auto writeJob = dynamic_cast<WritePasswordJob *>(incoming);
-        if (writeJob->error() == NoError) {
-            qCInfo(lcAccount) << "appPassword stored in keychain";
-        } else {
-            qCWarning(lcAccount) << "Unable to store appPassword in keychain" << writeJob->errorString();
-        }
-
-        // We don't try this again on error, to not raise CPU consumption
-        _wroteAppPassword = true;
+    job->setKey(key);
+    connect(job, &Job::finished, this, [operation, callback = std::move(callback)](Job *finishedJob) {
+        const auto error = finishedJob->error();
+        const auto result = error == NoError ? AppPasswordResult::Success
+            : error == EntryNotFound ? AppPasswordResult::Missing : AppPasswordResult::Error;
+        const auto value = operation == AppPasswordOperation::Read && result == AppPasswordResult::Success
+            ? static_cast<ReadPasswordJob *>(finishedJob)->binaryData() : QByteArray{};
+        callback(result, value);
     });
     job->start();
+}
+
+void Account::writeAppPasswordOnce(const QString &appPassword)
+{
+    const auto keys = appPasswordKeys();
+    if (_wroteAppPassword || appPassword.isEmpty() || keys.isEmpty()) {
+        return;
+    }
+    // Also prevent simultaneous successful replies from queuing duplicate writes.
+    _wroteAppPassword = true;
+    runAppPasswordJob(AppPasswordOperation::Write, keys.first(), appPassword.toLatin1(), [](AppPasswordResult result, const QByteArray &) {
+        if (result != AppPasswordResult::Success) {
+            qCWarning(lcAccount) << "Unable to store appPassword in keychain";
+        }
+    });
 }
 
 void Account::retrieveAppPassword()
 {
-    const auto key = QString(credentials()->user() + app_password);
-    const auto keychainKey = AbstractCredentials::keychainKey(
-                url().toString(),
-                key,
-                id()
-    );
+    retrieveAppPassword(appPasswordKeys());
+}
 
-    auto job = new ReadPasswordJob(Theme::instance()->appName());
-    job->setInsecureFallback(false);
-    job->setKey(keychainKey);
-    connect(job, &ReadPasswordJob::finished, [this](Job *incoming) {
-        auto readJob = dynamic_cast<ReadPasswordJob *>(incoming);
-        const auto password = readJob->binaryData();
-        // Error or no valid public key error out
-        if (readJob->error() == NoError && password.length() > 0) {
-            qCDebug(lcAccount) << "Found appPassword";
+void Account::retrieveAppPassword(const QStringList &keys, qsizetype index)
+{
+    if (keys.isEmpty()) {
+        Q_EMIT appPasswordRetrieved({});
+        return;
+    }
+    runAppPasswordJob(AppPasswordOperation::Read, keys.at(index), {}, [this, keys, index](AppPasswordResult result, const QByteArray &password) {
+        if (appPasswordKeys() != keys) {
+            Q_EMIT appPasswordRetrieved({});
+            return;
         }
-
-        Q_EMIT appPasswordRetrieved(password);
+        // A locked or unavailable keychain must not fall back to an older token.
+        if (result == AppPasswordResult::Missing && index + 1 < keys.size()) {
+            retrieveAppPassword(keys, index + 1);
+            return;
+        }
+        Q_EMIT appPasswordRetrieved(result == AppPasswordResult::Success ? QString::fromLatin1(password) : QString{});
     });
-    job->start();
 }
 
 void Account::deleteAppPassword()
 {
-    const auto keychainKey = AbstractCredentials::keychainKey(
-                url().toString(),
-                credentials()->user() + app_password,
-                id()
-    );
-
-    if (keychainKey.isEmpty()) {
-        qCDebug(lcAccount) << "appPassword is empty";
-        return;
+    const auto keys = appPasswordKeys();
+    _wroteAppPassword = false;
+    for (const auto &key : keys) {
+        runAppPasswordJob(AppPasswordOperation::Delete, key, {}, [](AppPasswordResult result, const QByteArray &) {
+            if (result == AppPasswordResult::Error) {
+                qCWarning(lcAccount) << "Unable to delete appPassword from keychain";
+            }
+        });
     }
-
-    auto job = new DeletePasswordJob(Theme::instance()->appName());
-    job->setInsecureFallback(false);
-    job->setKey(keychainKey);
-    connect(job, &DeletePasswordJob::finished, [this](Job *incoming) {
-        auto deleteJob = dynamic_cast<DeletePasswordJob *>(incoming);
-        const auto jobError = deleteJob->error();
-        if (jobError == NoError) {
-            qCInfo(lcAccount) << "appPassword deleted from keychain";
-        } else if (jobError == EntryNotFound) {
-            qCInfo(lcAccount) << "no appPassword entry found";
-        } else {
-            qCWarning(lcAccount) << "Unable to delete appPassword from keychain" << deleteJob->errorString();
-        }
-
-        // Allow storing a new app password on re-login
-        _wroteAppPassword = false;
-    });
-    job->start();
 }
 
 void Account::deleteAppToken()
@@ -1230,7 +1292,10 @@ void Account::setAskUserForMnemonic(const bool ask)
     Q_EMIT askUserForMnemonicChanged();
 }
 
-void Account::listRemoteFolder(QPromise<OCC::PlaceholderCreateInfo> *promise, const QString &remoteSyncRootPath, const QString &subPath, SyncJournalDb *journalForFolder)
+void Account::listRemoteFolder(QPromise<OCC::PlaceholderCreateInfo> *promise,
+                               const QString &remoteSyncRootPath,
+                               const QString &subPath,
+                               SyncJournalDb *journalForFolder)
 {
     qCInfo(lcAccount()) << "ls col job requested for" << subPath;
 
@@ -1280,6 +1345,12 @@ void Account::listRemoteFolder(QPromise<OCC::PlaceholderCreateInfo> *promise, co
         if (!sender()->property("ignoredFirst").toBool()) {
             qCDebug(lcAccount()) << "skip first item";
             sender()->setProperty("ignoredFirst", true);
+            sender()->setProperty("externalStorageBlocked", RemotePermissions::isExternalStorageType(properties.value(QStringLiteral("mount-type"))));
+            return;
+        }
+
+        if (sender()->property("externalStorageBlocked").toBool() || RemotePermissions::isExternalStorageType(properties.value(QStringLiteral("mount-type")))) {
+            qCInfo(lcAccount()) << "Skipping external storage placeholder" << completeDavPath;
             return;
         }
 
@@ -1384,6 +1455,7 @@ void Account::setProxyType(QNetworkProxy::ProxyType proxyType)
     proxy.setPassword(proxyPassword());
     _networkAccessManager->setProxy(proxy);
 
+    PrivateCloudTransport::apply(_networkAccessManager.data());
     Q_EMIT proxyTypeChanged();
 }
 
@@ -1404,6 +1476,7 @@ void Account::setProxyHostName(const QString &hostName)
     proxy.setHostName(hostName);
     _networkAccessManager->setProxy(proxy);
 
+    PrivateCloudTransport::apply(_networkAccessManager.data());
     Q_EMIT proxyHostNameChanged();
 }
 
@@ -1423,6 +1496,8 @@ void Account::setProxyPort(const int port)
     auto proxy = _networkAccessManager->proxy();
     proxy.setPort(port);
     _networkAccessManager->setProxy(proxy);
+
+    PrivateCloudTransport::apply(_networkAccessManager.data());
 
     Q_EMIT proxyPortChanged();
 }
@@ -1459,6 +1534,7 @@ void Account::setProxyUser(const QString &user)
     proxy.setUser(user);
     _networkAccessManager->setProxy(proxy);
 
+    PrivateCloudTransport::apply(_networkAccessManager.data());
     Q_EMIT proxyUserChanged();
 }
 
@@ -1478,6 +1554,8 @@ void Account::setProxyPassword(const QString &password)
     auto proxy = _networkAccessManager->proxy();
     proxy.setPassword(password);
     _networkAccessManager->setProxy(proxy);
+
+    PrivateCloudTransport::apply(_networkAccessManager.data());
 
     Q_EMIT proxyPasswordChanged();
 }

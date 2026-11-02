@@ -23,6 +23,8 @@ namespace QKeychain {
 
 namespace OCC {
 
+class PrivateCloudCredentialsDialog;
+
 namespace KeychainChunk {
     class ReadJob;
     class WriteJob;
@@ -126,6 +128,7 @@ protected:
     QString _appName;
 
     QPointer<BrowserReAuthWindow> _reAuthWindow;
+    QPointer<PrivateCloudCredentialsDialog> _privateCloudDialog;
 };
 
 } // namespace OCC

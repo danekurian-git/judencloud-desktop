@@ -14,11 +14,23 @@
 #include "common/utility.h"
 #include "config.h"
 #include "logger.h"
+#ifdef Q_OS_WIN
+#include <winioctl.h>
+#endif
+#ifdef Q_OS_WIN
+namespace OCC
+{
+OCSYNC_EXPORT extern std::function<Utility::LocalStorageType(const QString &)> localStorageTypeOverride;
+}
+#endif
 
 using namespace OCC::Utility;
 
 namespace OCC {
 OCSYNC_EXPORT extern bool fsCasePreserving_override;
+#ifdef Q_OS_WIN
+OCSYNC_EXPORT Utility::LocalStorageType classifyLocalStorage(UINT driveType, STORAGE_BUS_TYPE busType, bool removableMedia, bool hotplugDevice);
+#endif
 }
 
 class TestUtility : public QObject
@@ -33,6 +45,55 @@ private Q_SLOTS:
 
         QStandardPaths::setTestModeEnabled(true);
     }
+
+#ifdef Q_OS_WIN
+    void testLocalStorageClassification_data()
+    {
+        QTest::addColumn<UINT>("driveType");
+        QTest::addColumn<int>("busType");
+        QTest::addColumn<bool>("removableMedia");
+        QTest::addColumn<bool>("hotplugDevice");
+        QTest::addColumn<LocalStorageType>("expected");
+        QTest::newRow("internal-sata") << UINT(DRIVE_FIXED) << int(BusTypeSata) << false << false << LocalStorageType::Internal;
+        QTest::newRow("internal-nvme") << UINT(DRIVE_FIXED) << int(BusTypeNvme) << false << false << LocalStorageType::Internal;
+        QTest::newRow("usb-fixed-disk") << UINT(DRIVE_FIXED) << int(BusTypeUsb) << false << false << LocalStorageType::External;
+        QTest::newRow("sd-fixed-disk") << UINT(DRIVE_FIXED) << int(BusTypeSd) << false << false << LocalStorageType::External;
+        QTest::newRow("mmc-fixed-disk") << UINT(DRIVE_FIXED) << int(BusTypeMmc) << false << false << LocalStorageType::External;
+        QTest::newRow("firewire-disk") << UINT(DRIVE_FIXED) << int(BusType1394) << false << false << LocalStorageType::External;
+        QTest::newRow("removable-drive") << UINT(DRIVE_REMOVABLE) << int(BusTypeUnknown) << false << false << LocalStorageType::External;
+        QTest::newRow("removable-media") << UINT(DRIVE_FIXED) << int(BusTypeSata) << true << false << LocalStorageType::External;
+        QTest::newRow("hotplug-nvme") << UINT(DRIVE_FIXED) << int(BusTypeNvme) << false << true << LocalStorageType::External;
+        QTest::newRow("network-share") << UINT(DRIVE_REMOTE) << int(BusTypeUnknown) << false << false << LocalStorageType::Network;
+        QTest::newRow("unknown-bus") << UINT(DRIVE_FIXED) << int(BusTypeUnknown) << false << false << LocalStorageType::Unknown;
+        QTest::newRow("missing-drive") << UINT(DRIVE_NO_ROOT_DIR) << int(BusTypeUnknown) << false << false << LocalStorageType::Unknown;
+    }
+
+    void testLocalStorageClassification()
+    {
+        QFETCH(UINT, driveType);
+        QFETCH(int, busType);
+        QFETCH(bool, removableMedia);
+        QFETCH(bool, hotplugDevice);
+        QFETCH(LocalStorageType, expected);
+        QCOMPARE(OCC::classifyLocalStorage(driveType, static_cast<STORAGE_BUS_TYPE>(busType), removableMedia, hotplugDevice), expected);
+    }
+
+    void testSyncRootStoragePolicy()
+    {
+        QScopedValueRollback scope(OCC::localStorageTypeOverride);
+        for (const auto type : {LocalStorageType::Internal, LocalStorageType::Network, LocalStorageType::External, LocalStorageType::Unknown}) {
+            OCC::localStorageTypeOverride = [type](const QString &) {
+                return type;
+            };
+            QCOMPARE(syncRootStorageError(QStringLiteral("C:/sync")).isEmpty(), type == LocalStorageType::Internal || type == LocalStorageType::Network);
+        }
+    }
+
+    void testLocalStorageEmptyPath()
+    {
+        QCOMPARE(localStorageType({}), LocalStorageType::Unknown);
+    }
+#endif
 
     void testFormatFingerprint()
     {

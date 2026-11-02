@@ -7,14 +7,20 @@
 
 #include <QDir>
 #include <QFile>
+#include <QHash>
+#include <QMap>
+#include <QMutex>
+#include <QMutexLocker>
 
 #include "cfapiwrapper.h"
-#include "hydrationjob.h"
-#include "syncfileitem.h"
-#include "filesystem.h"
 #include "common/filesystembase.h"
 #include "common/syncjournaldb.h"
+#include "common/utility.h"
 #include "config.h"
+#include "filesystem.h"
+#include "hydrationjob.h"
+#include "networkjobs.h"
+#include "syncfileitem.h"
 
 #include <ntstatus.h>
 #include <cfapi.h>
@@ -103,7 +109,13 @@ class VfsCfApiPrivate
 {
 public:
     QList<HydrationJob *> hydrationJobs;
+    QHash<QString, quint64> pendingHydrationChecks;
+    quint64 nextHydrationCheck = 0;
+    bool stopped = true;
     CF_CONNECTION_KEY connectionKey = {};
+    mutable QMutex nativeFetchMutex;
+    bool shutdownRequested = false;
+    int nativeFetchCount = 0;
 };
 
 VfsCfApi::VfsCfApi(QObject *parent)
@@ -126,6 +138,7 @@ QString VfsCfApi::fileSuffix() const
 
 void VfsCfApi::startImpl(const VfsSetupParams &params)
 {
+    d->stopped = true;
     cfapi::registerShellExtension();
     const auto localPath = QDir::toNativeSeparators(params.filesystemPath);
 
@@ -142,16 +155,59 @@ void VfsCfApi::startImpl(const VfsSetupParams &params)
     }
 
     d->connectionKey = *std::move(connectResult);
+    d->stopped = false;
+    setShutdownRequested(false);
 }
 
 void VfsCfApi::stop()
 {
+    d->stopped = true;
+    const auto pendingRequests = d->pendingHydrationChecks.keys();
+    d->pendingHydrationChecks.clear();
+    for (const auto &requestId : pendingRequests) {
+        Q_EMIT hydrationRequestFailed(requestId);
+    }
     if (d->connectionKey.Internal != 0) {
         const auto result = cfapi::disconnectSyncRoot(std::move(d->connectionKey));
+        d->connectionKey = {};
         if (!result) {
             qCCritical(lcCfApi) << "Disconnect failed for" << QDir::toNativeSeparators(params().filesystemPath) << ":" << result.error();
         }
     }
+}
+
+bool VfsCfApi::isReady() const
+{
+    return !d->stopped && d->connectionKey.Internal != 0;
+}
+
+void VfsCfApi::setShutdownRequested(bool requested)
+{
+    const QMutexLocker lock(&d->nativeFetchMutex);
+    d->shutdownRequested = requested;
+}
+
+bool VfsCfApi::hasPendingFileOperations() const
+{
+    const QMutexLocker lock(&d->nativeFetchMutex);
+    return d->nativeFetchCount > 0 || !d->pendingHydrationChecks.isEmpty() || isHydrating();
+}
+
+bool VfsCfApi::beginNativeFetch()
+{
+    const QMutexLocker lock(&d->nativeFetchMutex);
+    if (d->shutdownRequested) {
+        return false;
+    }
+    ++d->nativeFetchCount;
+    return true;
+}
+
+void VfsCfApi::endNativeFetch()
+{
+    const QMutexLocker lock(&d->nativeFetchMutex);
+    Q_ASSERT(d->nativeFetchCount > 0);
+    --d->nativeFetchCount;
 }
 
 void VfsCfApi::unregisterFolder()
@@ -213,18 +269,24 @@ Result<void, QString> VfsCfApi::createPlaceholder(const SyncFileItem &item)
 
 Result<void, QString> VfsCfApi::createPlaceholders(const QList<SyncFileItemPtr> &items)
 {
-    const auto fileInfo = QFileInfo(_setupParams.filesystemPath + items[0]->_file);
-    const auto localPath = QDir::toNativeSeparators(fileInfo.absolutePath());
-
-    auto allPlaceholdersInfo = QList<cfapi::PlaceholdersInfo>{};
+    auto placeholdersByParent = QMap<QString, QList<cfapi::PlaceholdersInfo>>{};
     for (const auto &oneItem : items) {
-        auto fileInfo = QFileInfo(_setupParams.filesystemPath + oneItem->_file);
-        allPlaceholdersInfo.emplace_back(std::move(fileInfo), fileInfo.fileName(), QDir::toNativeSeparators(fileInfo.fileName()).toStdWString(), oneItem->_fileId, oneItem->_modtime, oneItem->_size);
+        const auto fileInfo = QFileInfo(_setupParams.filesystemPath + oneItem->_file);
+        const auto parent = QDir::toNativeSeparators(fileInfo.absolutePath());
+        placeholdersByParent[parent].emplace_back(fileInfo,
+                                                  fileInfo.fileName(),
+                                                  QDir::toNativeSeparators(fileInfo.fileName()).toStdWString(),
+                                                  oneItem->_fileId,
+                                                  oneItem->_modtime,
+                                                  oneItem->_size);
     }
-
-    const auto result = cfapi::createPlaceholdersInfo(localPath, {allPlaceholdersInfo});
-
-    return result;
+    for (auto it = placeholdersByParent.cbegin(); it != placeholdersByParent.cend(); ++it) {
+        const auto result = cfapi::createPlaceholdersInfo(it.key(), it.value());
+        if (!result) {
+            return result;
+        }
+    }
+    return {};
 }
 
 Result<void, QString> VfsCfApi::dehydratePlaceholder(const SyncFileItem &item)
@@ -414,6 +476,9 @@ HydrationJob *VfsCfApi::findHydrationJob(const QString &requestId) const
 
 void VfsCfApi::cancelHydration(const QString &requestId, const QString & /*path*/)
 {
+    if (d->pendingHydrationChecks.remove(requestId)) {
+        Q_EMIT hydrationRequestFailed(requestId);
+    }
     // Find matching hydration job for request id
     const auto hydrationJob = findHydrationJob(requestId);
     // If found, cancel it
@@ -426,6 +491,17 @@ void VfsCfApi::cancelHydration(const QString &requestId, const QString & /*path*
 void VfsCfApi::requestHydration(const QString &requestId, const QString &path)
 {
     qCInfo(lcCfApi) << "Received request to hydrate" << path << requestId;
+    if (d->stopped || d->pendingHydrationChecks.contains(requestId) || findHydrationJob(requestId)) {
+        d->pendingHydrationChecks.remove(requestId);
+        Q_EMIT hydrationRequestFailed(requestId);
+        return;
+    }
+    const auto storageError = Utility::syncRootStorageError(params().filesystemPath);
+    if (!storageError.isEmpty()) {
+        qCWarning(lcCfApi) << storageError;
+        Q_EMIT hydrationRequestFailed(requestId);
+        return;
+    }
     const auto root = QDir::toNativeSeparators(params().filesystemPath);
     Q_ASSERT(path.startsWith(root));
 
@@ -440,25 +516,46 @@ void VfsCfApi::requestHydration(const QString &requestId, const QString &path)
         return;
     }
 
-    bool isNotVirtualFileFailure = false;
-    if (!record.isVirtualFile()) {
-        if (isDehydratedPlaceholder(path)) {
-            qCWarning(lcCfApi) << "Hydration requested for a placeholder file not marked as virtual in local DB. Attempting to fix it...";
-            record._type = ItemTypeVirtualFileDownload;
-            isNotVirtualFileFailure = !journal->setFileRecord(record);
-        } else {
-            isNotVirtualFileFailure = true;
-        }
-    }
+    const auto checkId = ++d->nextHydrationCheck;
+    d->pendingHydrationChecks.insert(requestId, checkId);
+    checkRemoteStorageAllowed(
+        params().account,
+        params().remotePath + relativePath,
+        this,
+        [this, requestId, path, relativePath, journal, record, checkId](bool allowed) {
+            if (d->stopped || d->pendingHydrationChecks.value(requestId) != checkId) {
+                return;
+            }
+            d->pendingHydrationChecks.remove(requestId);
 
-    if (isNotVirtualFileFailure) {
-        qCWarning(lcCfApi) << "Couldn't hydrate, the file is not virtual";
-        Q_EMIT hydrationRequestFailed(requestId);
-        return;
-    }
+            SyncJournalFileRecord currentRecord;
+            const auto currentStorageError = Utility::syncRootStorageError(params().filesystemPath);
+            if (!allowed || !currentStorageError.isEmpty() || params().journal != journal || !journal->getFileRecord(relativePath, &currentRecord)
+                || !currentRecord.isValid() || currentRecord._fileId != record._fileId || currentRecord._etag != record._etag) {
+                qCWarning(lcCfApi) << "Hydration denied by storage policy or changed file metadata" << relativePath;
+                Q_EMIT hydrationRequestFailed(requestId);
+                return;
+            }
 
-    // All good, let's hydrate now
-    scheduleHydrationJob(requestId, relativePath, record);
+            bool isNotVirtualFileFailure = false;
+            if (!currentRecord.isVirtualFile()) {
+                if (isDehydratedPlaceholder(path)) {
+                    qCWarning(lcCfApi) << "Hydration requested for a placeholder file not marked as virtual in local DB. Attempting to fix it...";
+                    currentRecord._type = ItemTypeVirtualFileDownload;
+                    isNotVirtualFileFailure = !journal->setFileRecord(currentRecord);
+                } else {
+                    isNotVirtualFileFailure = true;
+                }
+            }
+
+            if (isNotVirtualFileFailure) {
+                qCWarning(lcCfApi) << "Couldn't hydrate, the file is not virtual";
+                Q_EMIT hydrationRequestFailed(requestId);
+                return;
+            }
+
+            scheduleHydrationJob(requestId, relativePath, currentRecord);
+        });
 }
 
 void VfsCfApi::fileStatusChanged(const QString &systemFileName, SyncFileStatus fileStatus)

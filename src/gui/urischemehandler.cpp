@@ -20,6 +20,7 @@
 #include <QList>
 #include <QLoggingCategory>
 #include <QSystemTrayIcon>
+#include "account.h"
 
 namespace OCC {
 
@@ -87,6 +88,9 @@ constexpr auto loginServerPathPrefix = "/server:";
 
 [[nodiscard]] bool isAllowedByConfiguredServerOverride(const QUrl &serverUrl)
 {
+    if (!Account::enforcedServerUrl().isEmpty()) {
+        return Account::isServerUrlAllowed(serverUrl);
+    }
     const auto configuredOverrideServerUrl = ConfigFile{}.overrideServerUrl();
     if (!configuredOverrideServerUrl.isEmpty()) {
         const auto normalizedServerUrl = normalizedServerUrlForComparison(serverUrl);

@@ -218,6 +218,7 @@ private:
     ConnectionStatus _lastConnectionValidatorStatus = ConnectionStatus::Undefined;
     QStringList _connectionErrors;
     bool _waitingForNewCredentials = false;
+    bool _signingOutByUi = false;
     QDateTime _timeOfLastETagCheck;
     QPointer<ConnectionValidator> _connectionValidator;
     TermsOfServiceChecker _termsOfServiceChecker;

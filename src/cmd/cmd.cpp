@@ -265,6 +265,11 @@ CommandMode parseOptions(const QStringList &app_args, CmdOptions *options)
             exit(1);
         }
         options->source_dir = sourceDirFileInfo.absoluteFilePath();
+        const auto storageError = Utility::syncRootStorageError(options->source_dir);
+        if (!storageError.isEmpty()) {
+            qCritical().noquote() << storageError;
+            exit(EXIT_FAILURE);
+        }
     }
 
     auto it = QStringListIterator{args};
@@ -578,7 +583,11 @@ int main(int argc, char **argv)
     }
 #endif
 
-    account->setUrl(hostUrl);
+    if (!account->setUrl(hostUrl)) {
+        qCritical("This client cannot connect to a different server.");
+        delete sslErrorHandler;
+        return EXIT_FAILURE;
+    }
     account->setSslErrorHandler(sslErrorHandler);
     account->setTrustCertificates(options.trustSSL);
 

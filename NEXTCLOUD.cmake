@@ -78,8 +78,21 @@ if(APPLE)
     endif()
 endif()
 
+# Keep persistent names stable; these labels are presentation only.
+set(APPLICATION_DISPLAY_NAME "${APPLICATION_NAME}")
+set(APPLICATION_DISPLAY_VENDOR "${APPLICATION_VENDOR}")
 set( APPLICATION_ICON_SET   "SVG" )
-set( APPLICATION_SERVER_URL "" CACHE STRING "URL for the server to use. If entered, the UI field will be pre-filled with it" )
+set( APPLICATION_SERVER_URL "https://cloud.monocloud.online" CACHE STRING "Monocloud account server" )
+if(WIN32 AND NOT APPLICATION_SERVER_URL STREQUAL "")
+    set(APPLICATION_ICON_NAME "privateCloud")
+    set(APPLICATION_DISPLAY_NAME "privateCloud")
+    set(APPLICATION_DISPLAY_VENDOR "privateCloud")
+endif()
+set(PRIVATECLOUD_DRIVE_LETTER "J" CACHE STRING "Reserved privateCloud Windows drive letter")
+string(TOUPPER "${PRIVATECLOUD_DRIVE_LETTER}" PRIVATECLOUD_DRIVE_LETTER)
+if(NOT PRIVATECLOUD_DRIVE_LETTER MATCHES "^[A-Z]$")
+    message(FATAL_ERROR "PRIVATECLOUD_DRIVE_LETTER must be one letter, for example J")
+endif()
 set( APPLICATION_SERVER_URL_ENFORCE ON ) # If set and APPLICATION_SERVER_URL is defined, the server can only connect to the pre-defined URL
 set( APPLICATION_REV_DOMAIN "com.nextcloud.desktopclient" )
 set( APPLICATION_REV_DOMAIN_DBUS "desktopclient.nextcloud.com" )
@@ -100,14 +113,14 @@ set( MAC_INSTALLER_BACKGROUND_FILE "${CMAKE_SOURCE_DIR}/admin/osx/installer-back
 # set( APPLICATION_LICENSE    "${OEM_THEME_DIR}/license.txt )
 
 ## Updater options
-option( BUILD_UPDATER "Build updater" ON )
+option( BUILD_UPDATER "Build updater" OFF )
 
-option( WITH_PROVIDERS "Build with providers list" ON )
+option( WITH_PROVIDERS "Build with providers list" OFF )
 
 option( ENFORCE_VIRTUAL_FILES_SYNC_FOLDER "Enforce use of virtual files sync folder when available" OFF )
 option( DISABLE_VIRTUAL_FILES_SYNC_FOLDER "Disable use of virtual files sync folder even when available" OFF )
 
-option(ENFORCE_SINGLE_ACCOUNT "Enforce use of a single account in desktop client" OFF)
+option(ENFORCE_SINGLE_ACCOUNT "Enforce use of a single account in desktop client" ON)
 
 option( DO_NOT_USE_PROXY "Do not use system wide proxy, instead always do a direct connection to server" OFF )
 

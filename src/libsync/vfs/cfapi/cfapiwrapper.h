@@ -102,6 +102,9 @@ struct PlaceholdersInfo {
     qint64 size;
 };
 
+// The returned structure borrows the name and identity buffers from entryInfo.
+NEXTCLOUD_CFAPI_EXPORT CF_PLACEHOLDER_CREATE_INFO createTransferPlaceholderInfo(const PlaceholderCreateInfo &entryInfo);
+
 NEXTCLOUD_CFAPI_EXPORT Result<void, QString> createPlaceholdersInfo(const QString &localBasePath, const QList<PlaceholdersInfo> &itemsInfo);
 NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString> updatePlaceholderInfo(const QString &path, const SyncFileItem &item, const QString &replacesPath = QString());
 NEXTCLOUD_CFAPI_EXPORT Result<OCC::Vfs::ConvertToPlaceholderResult, QString> convertToPlaceholder(const QString &path, const SyncFileItem &item, const QString &replacesPath);

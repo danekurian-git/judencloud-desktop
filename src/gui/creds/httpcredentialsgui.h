@@ -11,6 +11,8 @@
 
 namespace OCC {
 
+class PrivateCloudCredentialsDialog;
+
 /**
  * @brief The HttpCredentialsGui class
  * @ingroup gui
@@ -32,6 +34,10 @@ public:
     void askFromUser() override;
 
     static QString requestAppPasswordText(const Account *account);
+
+private:
+    QPointer<PrivateCloudCredentialsDialog> _privateCloudDialog;
+
 private Q_SLOTS:
     void showDialog();
     void askFromUserAsync();

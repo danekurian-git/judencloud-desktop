@@ -8,6 +8,7 @@
 #include "account.h"
 #include "common/filesystembase.h"
 #include "owncloudpropagator.h"
+#include "privateclouddrive.h"
 #include "common/syncjournaldb.h"
 #include "common/syncjournalfilerecord.h"
 #include "discoveryphase.h"
@@ -105,7 +106,15 @@ SyncEngine::SyncEngine(AccountPtr account,
     _clearTouchedFilesTimer.setInterval(30 * 1000);
     connect(&_clearTouchedFilesTimer, &QTimer::timeout, this, &SyncEngine::slotClearTouchedFiles);
     connect(this, &SyncEngine::finished, [this](bool /* finished */) {
-        _journal->keyValueStoreSet("last_sync", QDateTime::currentSecsSinceEpoch());
+        if (PrivateCloudDrive::isEnabled()) {
+            const auto identity = _account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + _account->davUser();
+            if (!PrivateCloudDrive::adoptedBackingPathError(identity, _localPath).isEmpty()) {
+                return;
+            }
+        }
+        if (Utility::syncRootStorageError(_localPath).isEmpty()) {
+            _journal->keyValueStoreSet("last_sync", QDateTime::currentSecsSinceEpoch());
+        }
     });
 }
 
@@ -490,6 +499,29 @@ void OCC::SyncEngine::slotItemDiscovered(const OCC::SyncFileItemPtr &item)
 
 void SyncEngine::startSync()
 {
+    if (s_anySyncRunning || _syncRunning) {
+        return;
+    }
+    if (PrivateCloudDrive::isEnabled()) {
+        const auto identity = _account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + _account->davUser();
+        const auto backingError = PrivateCloudDrive::adoptedBackingPathError(identity, _localPath);
+        if (!backingError.isEmpty()) {
+            _anotherSyncNeeded = NoFollowUpSync;
+            setSingleItemDiscoveryOptions({});
+            Q_EMIT syncError(backingError, ErrorCategory::GenericError);
+            Q_EMIT finished(false);
+            return;
+        }
+    }
+    const auto storageError = Utility::syncRootStorageError(_localPath);
+    if (!storageError.isEmpty()) {
+        _anotherSyncNeeded = NoFollowUpSync;
+        setSingleItemDiscoveryOptions({});
+        Q_EMIT syncError(storageError, ErrorCategory::GenericError);
+        Q_EMIT finished(false);
+        return;
+    }
+
     if (_journal->exists()) {
         QVector<SyncJournalDb::PollInfo> pollInfos = _journal->getPollInfos();
         if (!pollInfos.isEmpty()) {
@@ -521,10 +553,8 @@ void SyncEngine::startSync()
         }
     }
 
-    if (s_anySyncRunning || _syncRunning) {
-        return;
-    }
-    const auto currentEncryptionStatus = EncryptionStatusEnums::toDbEncryptionStatus(EncryptionStatusEnums::fromEndToEndEncryptionApiVersion(_account->capabilities().clientSideEncryptionVersion()));
+    const auto currentEncryptionStatus = EncryptionStatusEnums::toDbEncryptionStatus(
+        EncryptionStatusEnums::fromEndToEndEncryptionApiVersion(_account->capabilities().clientSideEncryptionVersion()));
     [[maybe_unused]] const auto result = _journal->listAllE2eeFoldersWithEncryptionStatusLessThan(static_cast<int>(currentEncryptionStatus), [this](const SyncJournalFileRecord &record) {
         _journal->schedulePathForRemoteDiscovery(record.path());
     });

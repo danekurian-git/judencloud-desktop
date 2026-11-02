@@ -13,6 +13,7 @@ Item {
 
     required property QtObject controller
     property string descriptionText: ""
+    property string titleText: qsTr("Switch to your browser")
     readonly property color primaryTextColor: Style.wizardPrimaryText
     readonly property color primaryButtonColor: Style.wizardPrimaryButtonBackground
 
@@ -36,7 +37,7 @@ Item {
         }
 
         EnforcedPlainTextLabel {
-            text: qsTr("Switch to your browser")
+            text: root.titleText
             color: root.primaryTextColor
             font.pixelSize: Style.pixelSize + 8
             font.bold: true

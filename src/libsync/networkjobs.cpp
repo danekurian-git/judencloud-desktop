@@ -371,7 +371,8 @@ QList<QByteArray> LsColJob::defaultProperties(FolderType isRootPath, AccountPtr 
               << "http://nextcloud.org/ns:lock-timeout"
               << "http://nextcloud.org/ns:lock-token";
     }
-    props << "http://nextcloud.org/ns:is-mount-root";
+    props << "http://nextcloud.org/ns:is-mount-root"
+          << "http://nextcloud.org/ns:mount-type";
 
     return props;
 }
@@ -798,6 +799,21 @@ QList<QByteArray> PropfindJob::properties() const
     return _properties;
 }
 
+void checkRemoteStorageAllowed(const AccountPtr &account, const QString &path, QObject *context, const std::function<void(bool)> &callback)
+{
+    auto *job = new PropfindJob(account, path, context);
+    job->setProperties({QByteArrayLiteral("http://nextcloud.org/ns:mount-type")});
+    job->setIgnoreUnavailableProperties(true);
+    QObject::connect(job, &PropfindJob::result, context, [callback](const QVariantMap &values) {
+        callback(values.contains(QStringLiteral("mount-type"))
+                 && !RemotePermissions::isExternalStorageType(values.value(QStringLiteral("mount-type")).toString()));
+    });
+    QObject::connect(job, &PropfindJob::finishedWithError, context, [callback] {
+        callback(false);
+    });
+    job->start();
+}
+
 bool PropfindJob::finished()
 {
     qCInfo(lcPropfindJob) << "PROPFIND of" << reply()->request().url() << "FINISHED WITH STATUS"
@@ -814,7 +830,7 @@ bool PropfindJob::finished()
             Q_EMIT finishedWithError(reply());
 
         } else {
-            const auto parsedItems = processPropfindDomDocument(domDocument);
+            const auto parsedItems = processPropfindDomDocument(domDocument, _ignoreUnavailableProperties);
             Q_EMIT result(parsedItems);
         }
 
@@ -827,7 +843,7 @@ bool PropfindJob::finished()
     return true;
 }
 
-QVariantMap PropfindJob::processPropfindDomDocument(const QDomDocument &domDocument)
+QVariantMap PropfindJob::processPropfindDomDocument(const QDomDocument &domDocument, bool ignoreUnavailableProperties)
 {
     if (!domDocument.hasChildNodes()) {
         return {};
@@ -844,6 +860,14 @@ QVariantMap PropfindJob::processPropfindDomDocument(const QDomDocument &domDocum
 
         if (propElement.isNull() || propElement.tagName() != propfindPropElementTagName) {
             continue;
+        }
+
+        if (ignoreUnavailableProperties) {
+            const auto statuses = propNode.parentNode().toElement().elementsByTagNameNS(QStringLiteral("DAV:"), QStringLiteral("status"));
+            const auto status = statuses.at(0).toElement().text().simplified().section(QLatin1Char(' '), 1, 1);
+            if (status != QStringLiteral("200")) {
+                continue;
+            }
         }
 
         auto propChildNode = propElement.firstChild();

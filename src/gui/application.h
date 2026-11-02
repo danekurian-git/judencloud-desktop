@@ -7,10 +7,11 @@
 #ifndef APPLICATION_H
 #define APPLICATION_H
 
-#include "owncloudgui.h"
-#include "progressdispatcher.h"
 #include "clientproxy.h"
 #include "folderman.h"
+#include "owncloudgui.h"
+#include "privatecloudstatus.h"
+#include "progressdispatcher.h"
 
 #ifdef Q_OS_MACOS
 #include "macOS/singleinstancemanager_mac.h"
@@ -23,18 +24,19 @@
 #endif
 
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QNetworkInformation>
 #include <QPointer>
 #include <QQueue>
 #include <QSet>
 #include <QTimer>
-#include <QElapsedTimer>
-#include <QNetworkInformation>
 
 class QMessageBox;
 class QSystemTrayIcon;
 class QSocket;
 
-namespace OCC {
+namespace OCC
+{
 
 Q_DECLARE_LOGGING_CATEGORY(lcApplication)
 
@@ -42,9 +44,14 @@ class Theme;
 class Folder;
 class ShellExtensionsServer;
 class SslErrorDialog;
+class PrivateCloudWindow;
+class PrivateCloudAccountSwitch;
+class PrivateCloudDriveController;
+class PrivateCloudDirectConnection;
 
 #if defined(Q_OS_MACOS)
-namespace Mac {
+namespace Mac
+{
 class FinderSyncXPC;
 class FinderSyncService;
 }
@@ -88,6 +95,8 @@ public Q_SLOTS:
     // TODO: this should not be public
     void slotownCloudWizardDone(int);
     void slotCrash();
+    void requestQuit();
+    void openPrivateCloudDrive();
     /**
      * Will download a virtual file, and open the result.
      * The argument is the filename of the virtual file (including the extension)
@@ -126,6 +135,23 @@ private:
     AccountManager::AccountsRestoreResult restoreLegacyAccount();
     void setupConfigFile();
     void setupAccountsAndFolders();
+    void restorePrivateCloudDrive();
+    void releasePrivateCloudDrive();
+    void setupPrivateCloudWindow();
+    void schedulePrivateCloudStatusUpdate();
+    void updatePrivateCloudStatus();
+    void retryPrivateCloudConnection();
+    void reviewPrivateCloudFiles();
+    void signOutPrivateCloud();
+    void changePrivateCloudAccount();
+    void finishPrivateCloudAccountChange();
+    enum class PrivateCloudPendingAction {
+        None,
+        ChangeAccount,
+        Quit,
+    };
+    void waitForPrivateCloudOperations(PrivateCloudPendingAction action);
+    void resumePrivateCloudFileRequests();
 
     void showMainDialogRemoteCommand();
     void parseOptionsRemoteCommand(const QStringList &options);
@@ -176,6 +202,22 @@ private:
     QString _setLanguage;
 
     QPointer<FolderMan> _folderManager;
+    QPointer<PrivateCloudWindow> _privateCloudWindow;
+    PrivateCloudAccountSwitch *_privateCloudAccountSwitch = nullptr;
+    PrivateCloudDriveController *_privateCloudDriveController = nullptr;
+    PrivateCloudDirectConnection *_privateCloudDirectConnection = nullptr;
+    PrivateCloudPendingAction _privateCloudPendingAction = PrivateCloudPendingAction::None;
+    bool _privateCloudQuitReady = false;
+    QPointer<AccountState> _privateCloudAccountBeingRemoved;
+    QTimer _privateCloudStatusTimer;
+    QTimer _privateCloudRecoveryTimer;
+    QHash<QString, PrivateCloudStatus::ProgressSnapshot> _privateCloudProgress;
+    QHash<QString, QStringList> _privateCloudConflicts;
+    bool _privateCloudOpenWhenReady = false;
+    bool _privateCloudForceDriveCheck = false;
+    QString _privateCloudDrivePath;
+    QString _privateCloudDriveError;
+    bool _privateCloudResumeAttempted = false;
 #if defined(Q_OS_WIN)
     QScopedPointer<ShellExtensionsServer> _shellExtensionsServer;
 #endif

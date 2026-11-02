@@ -6,6 +6,14 @@ find_package(Qt${QT_MAJOR_VERSION} REQUIRED COMPONENTS Widgets Svg Qml Quick Qui
 find_package(KF6Archive REQUIRED)
 find_package(KF6GuiAddons)
 
+# Packaging must carry the service required by the fixed-server Windows client.
+set(PRIVATECLOUD_DIRECT_HELPER_REQUIRED false)
+if(WIN32 AND APPLICATION_SERVER_URL_ENFORCE AND APPLICATION_SERVER_URL)
+    set(PRIVATECLOUD_DIRECT_HELPER_REQUIRED true)
+endif()
+configure_file(privatecloud-runtime-requirements.json.in
+    "${BIN_OUTPUT_DIRECTORY}/privatecloud-runtime-requirements.json" @ONLY)
+
 if(CMAKE_BUILD_TYPE MATCHES Debug)
     add_definitions(-DQT_QML_DEBUG)
 endif()
@@ -16,7 +24,7 @@ endif()
 
 # Icon switch: if branding is done, use the neutral state icons
 set(STATE_SUBDIR "")
-if(APPLICATION_NAME STREQUAL "Nextcloud" OR APPLICATION_NAME STREQUAL "NextcloudDev")
+if(APPLICATION_DISPLAY_NAME STREQUAL "Nextcloud" OR APPLICATION_DISPLAY_NAME STREQUAL "NextcloudDev")
     set(STATE_SUBDIR "nextcloud/")
 endif()
 
@@ -70,6 +78,22 @@ set(client_SRCS
     accountsetupcommandlinemanager.cpp
     application.h
     application.cpp
+    privateclouddrivecontroller.h
+    privateclouddrivecontroller.cpp
+    privatecloudstatus.h
+    privatecloudstatus.cpp
+    privatecloudissuesdialog.h
+    privatecloudissuesdialog.cpp
+    privatecloudwindow.h
+    privatecloudwindow.cpp
+    privatecloudconnectrelay.h
+    privatecloudconnectrelay.cpp
+    privateclouddirectconnection.h
+    privateclouddirectconnection.cpp
+    privatecloudrelayconnection.h
+    privatecloudrelayconnection.cpp
+    privatecloudaccountswitch.h
+    privatecloudaccountswitch.cpp
     invalidfilenamedialog.h
     invalidfilenamedialog.cpp
     caseclashfilenamedialog.h
@@ -256,6 +280,10 @@ set(client_SRCS
     creds/httpcredentialsgui.cpp
     creds/flow2auth.h
     creds/flow2auth.cpp
+    creds/privatecloudauthentication.h
+    creds/privatecloudauthentication.cpp
+    creds/privatecloudcredentialsdialog.h
+    creds/privatecloudcredentialsdialog.cpp
     creds/webflowcredentials.h
     creds/webflowcredentials.cpp
     wizard/accountwizardcontroller.h
@@ -500,6 +528,9 @@ endif()
 
 if(WIN32)
   set(STARTMENU_ICON_SVG "${theme_dir}/colored/${APPLICATION_ICON_NAME}-w10startmenu.svg")
+  if(APPLICATION_ICON_NAME STREQUAL "privateCloud")
+    set(STARTMENU_ICON_SVG "${theme_dir}/colored/${APPLICATION_ICON_NAME}-icon.svg")
+  endif()
   generate_sized_png_from_svg(${STARTMENU_ICON_SVG} 70)
   generate_sized_png_from_svg(${STARTMENU_ICON_SVG} 150)
 endif()
@@ -770,7 +801,7 @@ if (APPLE)
 endif()
 
 if (WIN32)
-    target_link_libraries(nextcloudCore PRIVATE xaudio2)
+    target_link_libraries(nextcloudCore PRIVATE xaudio2 ws2_32)
     target_compile_definitions(nextcloudCore PRIVATE NEXTCLOUD_HAS_NATIVE_SOUND_BACKEND)
 endif()
 

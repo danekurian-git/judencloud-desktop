@@ -177,6 +177,24 @@ public:
     /// Stop interaction with VFS provider. Like when the client application quits.
     virtual void stop() = 0;
 
+    /// Whether provider initialization has completed successfully.
+    [[nodiscard]] virtual bool isReady() const
+    {
+        return true;
+    }
+
+    /// Refuse new native file requests while an owner prepares to disconnect.
+    virtual void setShutdownRequested(bool requested)
+    {
+        Q_UNUSED(requested)
+    }
+
+    /// Whether file requests still need their provider and its event loop.
+    [[nodiscard]] virtual bool hasPendingFileOperations() const
+    {
+        return isHydrating();
+    }
+
     /// Deregister the folder with the sync provider, like when a folder is removed.
     virtual void unregisterFolder() = 0;
 

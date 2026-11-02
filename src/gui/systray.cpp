@@ -4,23 +4,24 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include "systray.h"
+#include "accessmanager.h"
 #include "accountmanager.h"
 #include "accountstate.h"
 #include "activity/syncstatussummary.h"
 #include "assistant/assistantmodule.h"
-#include "systray.h"
-#include "theme.h"
-#include "config.h"
+#include "callstatechecker.h"
 #include "common/utility.h"
-#include "tray/svgimageprovider.h"
+#include "config.h"
+#include "configfile.h"
+#include "guiutility.h"
+#include "privateclouddrive.h"
 #include "search/unifiedsearchresultslistmodel.h"
+#include "theme.h"
+#include "tray/svgimageprovider.h"
+#include "tray/trayimageprovider.h"
 #include "tray/usermodel.h"
 #include "wheelhandler.h"
-#include "tray/trayimageprovider.h"
-#include "configfile.h"
-#include "accessmanager.h"
-#include "callstatechecker.h"
-#include "guiutility.h"
 
 #ifdef Q_OS_MACOS
 #include "foregroundbackground_interface.h"
@@ -185,6 +186,10 @@ void Systray::showWindow(WindowPosition position)
 
 void Systray::showTrayPopup(WindowPosition position)
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        Q_EMIT openSettings();
+        return;
+    }
     if (isOpen()) {
         return;
     }
@@ -223,6 +228,10 @@ void Systray::hideWindow()
 
 void Systray::showActivitiesWindow(int userIndex)
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        Q_EMIT openSettings();
+        return;
+    }
     const auto userModel = UserModel::instance();
     if (!userModel) {
         return;
@@ -322,6 +331,10 @@ void Systray::showActivitiesWindow(int userIndex)
 
 void Systray::showAssistantWindow(int userIndex)
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        Q_EMIT openSettings();
+        return;
+    }
     const auto userModel = UserModel::instance();
     if (!userModel) {
         return;
@@ -379,6 +392,10 @@ void Systray::showAssistantWindow(int userIndex)
 
 void Systray::showSearchWindow(int userIndex)
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        Q_EMIT openSettings();
+        return;
+    }
     const auto userModel = UserModel::instance();
     if (!userModel) {
         return;
@@ -480,6 +497,10 @@ void Systray::showSearchWindow(int userIndex)
 
 void Systray::showUserStatusWindow(int userIndex)
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        Q_EMIT openSettings();
+        return;
+    }
     const auto userModel = UserModel::instance();
     if (!userModel || userIndex < 0 || userIndex >= userModel->rowCount()) {
         qCWarning(lcSystray) << "Invalid user index for user status window:" << userIndex;
@@ -565,6 +586,11 @@ void Systray::setupContextMenu()
     // NOTE: for reasons unclear, setting the the new menu after adding all the actions
     // will not work on GNOME, as the old menu will not be correctly replaced.
     setContextMenu(_contextMenu);
+    if (PrivateCloudDrive::isEnabled()) {
+        _contextMenu->addAction(tr("Show privateCloud"), this, &Systray::openSettings);
+        _contextMenu->addAction(tr("Quit"), this, &Systray::shutdown);
+        return;
+    }
 
 #if defined(Q_OS_LINUX)
     setupQtTrayContextMenu(_contextMenu, this);

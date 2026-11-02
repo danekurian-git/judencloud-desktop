@@ -5,6 +5,7 @@
 
 #include "accountsetupcommandlinemanager.h"
 #include "accountsetupfromcommandlinejob.h"
+#include "account.h"
 
 namespace OCC
 {
@@ -59,6 +60,11 @@ bool AccountSetupCommandLineManager::parseCommandlineOption(const QString &optio
     } else if (option == QStringLiteral("--serverurl")) {
         if (optionsIterator.hasNext() && !optionsIterator.peekNext().startsWith(QLatin1String("--"))) {
             _serverUrl = optionsIterator.next();
+            if (!Account::isServerUrlAllowed(_serverUrl)) {
+                _serverUrl.clear();
+                errorMessage = QStringLiteral("This client cannot connect to a different server.");
+                return false;
+            }
             return true;
         } else {
             errorMessage = QStringLiteral("serverurl not specified");

@@ -27,6 +27,13 @@ public:
     QString fileSuffix() const override;
 
     void stop() override;
+    [[nodiscard]] bool isReady() const override;
+    void setShutdownRequested(bool requested) override;
+    [[nodiscard]] bool hasPendingFileOperations() const override;
+
+    // Called on native callback threads. Every successful entry needs one exit.
+    Q_INVOKABLE bool beginNativeFetch();
+    Q_INVOKABLE void endNativeFetch();
     void unregisterFolder() override;
 
     bool socketApiPinStateActionsShown() const override;
@@ -52,7 +59,7 @@ public:
     Optional<PinState> pinState(const QString &folderPath) override;
     AvailabilityResult availability(const QString &folderPath, const AvailabilityRecursivity recursiveCheck) override;
 
-    void cancelHydration(const QString &requestId, const QString &path);
+    Q_INVOKABLE void cancelHydration(const QString &requestId, const QString &path);
 
     int finalizeHydrationJob(const QString &requestId);
 

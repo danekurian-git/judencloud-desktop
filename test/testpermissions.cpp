@@ -107,6 +107,19 @@ private Q_SLOTS:
         QTest::newRow("delete") << false;
     }
 
+    void testFakeDavPathsMatchAccount()
+    {
+        FakeFolder fakeFolder{FileInfo{}, {}, {}, false};
+        const auto account = fakeFolder.syncEngine().account();
+        QVERIFY(!account->url().isEmpty());
+        QVERIFY(Account::isServerUrlAllowed(account->url()));
+        QCOMPARE(account->davUrl().path(), sRootUrl2.path());
+        const auto nestedFile = Utility::concatUrlPath(account->davUrl(), QStringLiteral("folder/file"));
+        QCOMPARE(getFilePathFromUrl(nestedFile), QStringLiteral("folder/file"));
+        QCOMPARE(getFilePathFromUrl(Utility::concatUrlPath(sUploadUrl, QStringLiteral("upload-id/chunk"))), QStringLiteral("upload-id/chunk"));
+        QCOMPARE(getFilePathFromUrl(account->davUrl()), QStringLiteral(""));
+    }
+
     void t7pl()
     {
         QFETCH(bool, moveToTrashEnabled);
@@ -948,12 +961,18 @@ private Q_SLOTS:
     {
         FakeFolder fakeFolder{FileInfo{}};
         QObject parent;
+        auto contentRequests = 0;
 
         fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *outgoingData) -> QNetworkReply * {
             Q_UNUSED(outgoingData)
 
             if (op == QNetworkAccessManager::GetOperation) {
-                return new FakeErrorReply(op, request, &parent, 403, "Access to this shared resource has been denied because its download permission is disabled.");
+                ++contentRequests;
+                return new FakeErrorReply(op,
+                                          request,
+                                          &parent,
+                                          403,
+                                          "Access to this shared resource has been denied because its download permission is disabled.");
             }
 
             return nullptr;
@@ -976,7 +995,9 @@ private Q_SLOTS:
 
         // also hook into discovery!!
         SyncFileItemVector discovery;
-        connect(&fakeFolder.syncEngine(), &SyncEngine::aboutToPropagate, this, [&discovery](auto v) { discovery = v; });
+        connect(&fakeFolder.syncEngine(), &SyncEngine::aboutToPropagate, this, [&discovery](auto v) {
+            discovery = v;
+        });
         ItemCompletedSpy completeSpy(fakeFolder);
         QVERIFY(fakeFolder.syncOnce());
 
@@ -984,6 +1005,78 @@ private Q_SLOTS:
         QVERIFY(discoveryInstruction(discovery, "file", CSYNC_INSTRUCTION_IGNORE));
         QVERIFY(itemInstruction(completeSpy, "folder", CSYNC_INSTRUCTION_IGNORE));
         QVERIFY(discoveryInstruction(discovery, "folder", CSYNC_INSTRUCTION_IGNORE));
+        QCOMPARE(contentRequests, 0);
+        QVERIFY(!QFileInfo::exists(fakeFolder.localPath() + QStringLiteral("file")));
+        QVERIFY(!QFileInfo::exists(fakeFolder.localPath() + QStringLiteral("folder")));
+    }
+
+    void testServerDeniesDownloadAfterReadableDiscovery_data()
+    {
+        QTest::addColumn<bool>("previouslyDownloaded");
+        QTest::newRow("new file stays absent") << false;
+        QTest::newRow("previously authorized cache stays unchanged") << true;
+    }
+
+    void testServerDeniesDownloadAfterReadableDiscovery()
+    {
+        QFETCH(bool, previouslyDownloaded);
+        FakeFolder fakeFolder{FileInfo{}};
+        const auto deniedPath = QStringLiteral("permission-changed.txt");
+        const auto allowedPath = QStringLiteral("still-readable.txt");
+        constexpr auto contentSize = 32;
+        fakeFolder.remoteModifier().insert(deniedPath, contentSize, 'O');
+        if (previouslyDownloaded) {
+            QVERIFY(fakeFolder.syncOnce());
+        }
+        fakeFolder.remoteModifier().setContents(deniedPath, 'N');
+        fakeFolder.remoteModifier().insert(allowedPath, contentSize, 'A');
+
+        // Discovery still reports a readable file. Permission changes between
+        // listing and GET must not publish denied content or destroy old cache.
+        auto deniedRequests = 0;
+        auto allowedRequests = 0;
+        QStringList requestedPaths;
+        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            if (operation != QNetworkAccessManager::GetOperation) {
+                return nullptr;
+            }
+            requestedPaths.append(request.url().path());
+            if (request.url().path().endsWith(deniedPath)) {
+                ++deniedRequests;
+                return new FakeErrorReply(operation,
+                                          request,
+                                          fakeFolder.networkAccessManager(),
+                                          403,
+                                          "The user no longer has permission to download this file.");
+            }
+            if (request.url().path().endsWith(allowedPath)) {
+                ++allowedRequests;
+            }
+            return nullptr;
+        });
+
+        ItemCompletedSpy completed(fakeFolder);
+        QVERIFY(!fakeFolder.syncOnce());
+        QCOMPARE(deniedRequests, 1);
+        QCOMPARE(allowedRequests, 1);
+        const auto deniedItem = completed.findItem(deniedPath);
+        QVERIFY(deniedItem);
+        QCOMPARE(deniedItem->_status, SyncFileItem::NormalError);
+        for (const auto &requestedPath : requestedPaths) {
+            QVERIFY(requestedPath.startsWith(fakeFolder.syncEngine().account()->davUrl().path()));
+        }
+        QFile allowedFile(fakeFolder.localPath() + allowedPath);
+        QVERIFY(allowedFile.open(QIODevice::ReadOnly));
+        QCOMPARE(allowedFile.readAll(), QByteArray(contentSize, 'A'));
+        allowedFile.close();
+        QFile deniedFile(fakeFolder.localPath() + deniedPath);
+        if (previouslyDownloaded) {
+            QVERIFY(deniedFile.open(QIODevice::ReadOnly));
+            QCOMPARE(deniedFile.readAll(), QByteArray(contentSize, 'O'));
+        } else {
+            QVERIFY(!deniedFile.exists());
+        }
+        QCOMPARE(fakeFolder.currentRemoteState().find(deniedPath)->contentChar, 'N');
     }
 
     void testExistingFileBecomeForbiddenDownload()

@@ -18,9 +18,19 @@
 #include "folder.h"
 #include "folderman.h"
 #include "logger.h"
+#include "openfilemanager.h"
+#include "owncloudpropagator.h"
+#include "privatecloudaccountswitch.h"
+#include "privateclouddirectconnection.h"
+#include "privateclouddrive.h"
+#include "privateclouddrivecontroller.h"
+#include "privatecloudissuesdialog.h"
+#include "privatecloudstatus.h"
+#include "privatecloudwindow.h"
 #include "pushnotifications.h"
 #include "socketapi/socketapi.h"
 #include "theme.h"
+#include "tray/usermodel.h"
 #include "urischemehandler.h"
 
 #if defined(BUILD_UPDATER)
@@ -37,106 +47,111 @@
 #include "settings/migration.h"
 
 #if defined(Q_OS_WIN)
-#include <windows.h>
 #include "shellextensionsserver.h"
+#include <windows.h>
 #elif defined(Q_OS_MACOS)
 #include "macOS/fileprovider.h"
 #include "macOS/fileprovidersettingscontroller.h"
 #include "macOS/findersyncbrokerregistrar.h"
-#include "macOS/findersyncxpc.h"
 #include "macOS/findersyncservice.h"
+#include "macOS/findersyncxpc.h"
 #endif
 
+#include <QAbstractButton>
+#include <QDesktopServices>
+#include <QFileOpenEvent>
+#include <QGuiApplication>
+#include <QHttp2Configuration>
 #include <QLocale>
-#include <QTranslator>
 #include <QMenu>
 #include <QMessageBox>
-#include <QDesktopServices>
-#include <QGuiApplication>
-#include <QVersionNumber>
-#include <QRandomGenerator>
-#include <QHttp2Configuration>
 #include <QPushButton>
-#include <QAbstractButton>
-#include <QFileOpenEvent>
+#include <QRandomGenerator>
+#include <QTranslator>
+#include <QVersionNumber>
+#include <QtConcurrentRun>
 
 #include <iostream>
 
 class QSocket;
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcApplication, "nextcloud.gui.application", QtInfoMsg)
 
-namespace {
+namespace
+{
 
-    static const char optionsC[] =
-        "Options:\n"
-        "  --help, -h                 : show this help screen.\n"
-        "  --version, -v              : show version information.\n"
-        "  -q --quit                  : quit the running instance\n"
-        "  --logwindow, -l            : open a window to show log output.\n"
-        "  --logfile <filename>       : write log output to file <filename>.\n"
-        "  --logdir <name>            : write each sync log output in a new file\n"
-        "                               in folder <name>.\n"
-        "  --logexpire <hours>        : removes logs older than <hours> hours.\n"
-        "                               (to be used with --logdir)\n"
-        "  --logflush                 : flush the log file after every write.\n"
-        "  --logdebug                 : also output debug-level messages in the log.\n"
-        "  --confdir <dirname>        : Use the given configuration folder.\n"
-        "  --background               : launch the application in the background.\n"
-        "  --overrideserverurl        : specify a server URL to use for the force override to be used in the account setup wizard.\n"
-        "  --overridelocaldir         : specify a local dir to be used in the account setup wizard.\n"
-        "  --userid                   : userId (username as on the server) to pass when creating an account via command-line.\n"
-        "  --apppassword              : appPassword to pass when creating an account via command-line.\n"
-        "  --set-language <lang>      : specify a language to use for the client, regardless of the OS language.\n"
-        "  --localdirpath             : (optional) path where to create a local sync folder when creating an account via command-line.\n"
-        "  --isvfsenabled             : whether to set a VFS or non-VFS folder (1 for 'yes' or 0 for 'no') when creating an account via command-line.\n"
-        "  --remotedirpath            : (optional) path to a remote subfolder when creating an account via command-line.\n"
-        "  --serverurl                : a server URL to use when creating an account via command-line.\n"
+static const char optionsC[] =
+    "Options:\n"
+    "  --help, -h                 : show this help screen.\n"
+    "  --version, -v              : show version information.\n"
+    "  -q --quit                  : quit the running instance\n"
+    "  --logwindow, -l            : open a window to show log output.\n"
+    "  --logfile <filename>       : write log output to file <filename>.\n"
+    "  --logdir <name>            : write each sync log output in a new file\n"
+    "                               in folder <name>.\n"
+    "  --logexpire <hours>        : removes logs older than <hours> hours.\n"
+    "                               (to be used with --logdir)\n"
+    "  --logflush                 : flush the log file after every write.\n"
+    "  --logdebug                 : also output debug-level messages in the log.\n"
+    "  --confdir <dirname>        : Use the given configuration folder.\n"
+    "  --background               : launch the application in the background.\n"
+#if !defined(APPLICATION_SERVER_URL_ENFORCE) || !defined(APPLICATION_SERVER_URL)
+    "  --overrideserverurl        : specify a server URL to use for the force override to be used in the account setup wizard.\n"
+#endif
+    "  --overridelocaldir         : specify a local dir to be used in the account setup wizard.\n"
+    "  --userid                   : userId (username as on the server) to pass when creating an account via command-line.\n"
+    "  --apppassword              : appPassword to pass when creating an account via command-line.\n"
+    "  --set-language <lang>      : specify a language to use for the client, regardless of the OS language.\n"
+    "  --localdirpath             : (optional) path where to create a local sync folder when creating an account via command-line.\n"
+    "  --isvfsenabled             : whether to set a VFS or non-VFS folder (1 for 'yes' or 0 for 'no') when creating an account via command-line.\n"
+    "  --remotedirpath            : (optional) path to a remote subfolder when creating an account via command-line.\n"
+    "  --serverurl                : a server URL to use when creating an account via command-line.\n"
 #if !DISABLE_ACCOUNT_MIGRATION
-        "  --forcelegacyconfigimport  : forcefully import account configurations from legacy clients (if available).\n"
+    "  --forcelegacyconfigimport  : forcefully import account configurations from legacy clients (if available).\n"
 #endif
-        "  --reverse            : use a reverse layout direction.\n";
+    "  --reverse            : use a reverse layout direction.\n";
 
-    QString applicationTrPath()
-    {
-        QString devTrPath = qApp->applicationDirPath() + QString::fromLatin1("/../src/gui/");
-        if (QDir(devTrPath).exists()) {
-            // might miss Qt, QtKeyChain, etc.
-            qCWarning(lcApplication) << "Running from build location! Translations may be incomplete!";
-            return devTrPath;
-        }
-#if defined(Q_OS_WIN)
-        return QApplication::applicationDirPath() + QLatin1String("/i18n/");
-#elif defined(Q_OS_MACOS)
-        return QApplication::applicationDirPath() + QLatin1String("/../Resources/Translations"); // path defaults to app dir.
-#elif defined(Q_OS_UNIX)
-        if (qEnvironmentVariableIsSet("APPIMAGE")) {
-            return QApplication::applicationDirPath() + QLatin1String("/../share/" APPLICATION_EXECUTABLE "/i18n/");
-        } else {
-            return QString::fromLatin1(SHAREDIR "/" APPLICATION_EXECUTABLE "/i18n/");
-        }
-#endif
+QString applicationTrPath()
+{
+    QString devTrPath = qApp->applicationDirPath() + QString::fromLatin1("/../src/gui/");
+    if (QDir(devTrPath).exists()) {
+        // might miss Qt, QtKeyChain, etc.
+        qCWarning(lcApplication) << "Running from build location! Translations may be incomplete!";
+        return devTrPath;
     }
+#if defined(Q_OS_WIN)
+    return QApplication::applicationDirPath() + QLatin1String("/i18n/");
+#elif defined(Q_OS_MACOS)
+    return QApplication::applicationDirPath() + QLatin1String("/../Resources/Translations"); // path defaults to app dir.
+#elif defined(Q_OS_UNIX)
+    if (qEnvironmentVariableIsSet("APPIMAGE")) {
+        return QApplication::applicationDirPath() + QLatin1String("/../share/" APPLICATION_EXECUTABLE "/i18n/");
+    } else {
+        return QString::fromLatin1(SHAREDIR "/" APPLICATION_EXECUTABLE "/i18n/");
+    }
+#endif
+}
 
 #if defined(Q_OS_MACOS)
-    /**
-     * @brief Normalise a sync folder path for FinderSync registration.
-     *
-     * Folder::path() always carries a trailing slash. The shell integration protocol does not
-     * want one: SocketApi::broadcastStatusPushMessage even asserts its absence, so registering
-     * the slashed form makes the registered directory set and the pushed status paths disagree.
-     * Relying on NSURL to normalise it away instead only works while the directory still
-     * exists, which is exactly not the case when a folder is being removed.
-     */
-    QString finderSyncRegistrationPath(QString path)
-    {
-        while (path.endsWith(QLatin1Char('/'))) {
-            path.chop(1);
-        }
-        return path;
+/**
+ * @brief Normalise a sync folder path for FinderSync registration.
+ *
+ * Folder::path() always carries a trailing slash. The shell integration protocol does not
+ * want one: SocketApi::broadcastStatusPushMessage even asserts its absence, so registering
+ * the slashed form makes the registered directory set and the pushed status paths disagree.
+ * Relying on NSURL to normalise it away instead only works while the directory still
+ * exists, which is exactly not the case when a folder is being removed.
+ */
+QString finderSyncRegistrationPath(QString path)
+{
+    while (path.endsWith(QLatin1Char('/'))) {
+        path.chop(1);
     }
+    return path;
+}
 #endif
 }
 
@@ -156,7 +171,7 @@ bool Application::configVersionMigration()
     QStringList deleteKeys, ignoreKeys;
     AccountManager::backwardMigrationSettingsKeys(&deleteKeys, &ignoreKeys);
     FolderMan::backwardMigrationSettingsKeys(&deleteKeys, &ignoreKeys);
-    qCDebug(lcApplication) << "Migration is in progress:"  << Migration::isInProgress();
+    qCDebug(lcApplication) << "Migration is in progress:" << Migration::isInProgress();
     const auto versionChanged = Migration::versionChanged();
     if (versionChanged) {
         qCInfo(lcApplication) << "Version changed. Removing updater settings from config.";
@@ -263,10 +278,11 @@ Application::Application(int &argc, char **argv)
     setDesktopFileName(QString(LINUX_APPLICATION_ID));
 
     setApplicationName(_theme->appName());
+    setApplicationDisplayName(_theme->appNameGUI());
     setWindowIcon(_theme->applicationIcon());
 
     parseOptions(arguments());
-    //no need to waste time;
+    // no need to waste time;
     if (_helpOnly || _versionOnly) {
         return;
     }
@@ -287,7 +303,7 @@ Application::Application(int &argc, char **argv)
 #endif
 
     if (!ConfigFile().exists()) {
-        setApplicationName(_theme->appNameGUI());
+        setApplicationName(QStringLiteral(APPLICATION_NAME));
         QString legacyDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/" + APPLICATION_CONFIG_NAME;
 
         if (legacyDir.endsWith('/')) {
@@ -312,7 +328,7 @@ Application::Application(int &argc, char **argv)
                     const QStringList filesList = QDir(legacyDir).entryList(QDir::Files);
                     qCDebug(lcApplication) << "Will move the individual files" << filesList;
                     for (const auto &name : filesList) {
-                        if (!QFile::rename(legacyDir + "/" + name,  confDir + "/" + name)) {
+                        if (!QFile::rename(legacyDir + "/" + name, confDir + "/" + name)) {
                             qCDebug(lcApplication) << "Fallback move of " << name << "also failed";
                         }
                     }
@@ -399,8 +415,7 @@ Application::Application(int &argc, char **argv)
     }
 
     _theme->setSystrayUseMonoIcons(ConfigFile().monoIcons());
-    connect(this, &Application::systemPaletteChanged,
-            _theme, &Theme::systemPaletteHasChanged);
+    connect(this, &Application::systemPaletteChanged, _theme, &Theme::systemPaletteHasChanged);
 
 #if defined(Q_OS_WIN)
     _shellExtensionsServer.reset(new ShellExtensionsServer);
@@ -413,6 +428,34 @@ Application::Application(int &argc, char **argv)
 #else
     connect(&_singleApp, &KDSingleApplication::messageReceived, this, &Application::slotParseMessage);
 #endif
+
+    // Establish the required transport policy before restoring accounts: even
+    // their first metadata/authentication request must use the vetted relay.
+    if (PrivateCloudDrive::isEnabled()) {
+        _privateCloudDirectConnection = new PrivateCloudDirectConnection(this);
+        connect(
+            _privateCloudDirectConnection,
+            &PrivateCloudDirectConnection::readyChanged,
+            this,
+            [this] {
+                schedulePrivateCloudStatusUpdate();
+                if (!_privateCloudDirectConnection->isReady() || !_privateCloudAccountSwitch || _privateCloudAccountSwitch->isRunning()) {
+                    return;
+                }
+                for (const auto &state : AccountManager::instance()->accounts()) {
+                    if (!state->isSignedOut() && state->state() != AccountState::AskingCredentials) {
+                        state->freshConnectionAttempt();
+                    }
+                }
+            },
+            Qt::QueuedConnection);
+        connect(_privateCloudDirectConnection,
+                &PrivateCloudDirectConnection::errorChanged,
+                this,
+                &Application::schedulePrivateCloudStatusUpdate,
+                Qt::QueuedConnection);
+        _privateCloudDirectConnection->start();
+    }
 
     // create accounts and folders from a legacy desktop client or from the current config file
     setupAccountsAndFolders();
@@ -433,6 +476,11 @@ Application::Application(int &argc, char **argv)
     // Setting up the gui class will allow tray notifications for the
     // setup that follows, like folder setup
     _gui = new ownCloudGui(this);
+    if (PrivateCloudDrive::isEnabled()) {
+        setupPrivateCloudWindow();
+    }
+    connect(_folderManager.data(), &FolderMan::folderListChanged, this, &Application::restorePrivateCloudDrive, Qt::QueuedConnection);
+    QTimer::singleShot(0, this, &Application::restorePrivateCloudDrive);
     connect(_theme, &Theme::systrayUseMonoIconsChanged, _gui, &ownCloudGui::slotComputeOverallSyncStatus);
     if (_showLogWindow) {
         _gui->slotToggleLogBrowser(); // _showLogWindow is set in parseOptions.
@@ -454,32 +502,24 @@ Application::Application(int &argc, char **argv)
 
     _proxy.setupQtProxyFromConfig(); // folders have to be defined first, than we set up the Qt proxy.
 
-    connect(AccountManager::instance(), &AccountManager::accountAdded,
-        this, &Application::slotAccountStateAdded);
-    connect(AccountManager::instance(), &AccountManager::accountRemoved,
-        this, &Application::slotAccountStateRemoved);
+    connect(AccountManager::instance(), &AccountManager::accountAdded, this, &Application::slotAccountStateAdded);
+    connect(AccountManager::instance(), &AccountManager::accountRemoved, this, &Application::slotAccountStateRemoved);
     const auto accounts = AccountManager::instance()->accounts();
     for (const auto &ai : accounts) {
         slotAccountStateAdded(ai.data());
     }
 
-    connect(FolderMan::instance()->socketApi(), &SocketApi::shareCommandReceived,
-        _gui.data(), &ownCloudGui::slotShowShareDialog);
+    connect(FolderMan::instance()->socketApi(), &SocketApi::shareCommandReceived, _gui.data(), &ownCloudGui::slotShowShareDialog);
 
-    connect(FolderMan::instance()->socketApi(), &SocketApi::governanceLabelsCommandReceived,
-            _gui.data(), &ownCloudGui::slotShowGovernanceLabelsDialog);
+    connect(FolderMan::instance()->socketApi(), &SocketApi::governanceLabelsCommandReceived, _gui.data(), &ownCloudGui::slotShowGovernanceLabelsDialog);
 
-    connect(FolderMan::instance()->socketApi(), &SocketApi::fileActivityCommandReceived,
-        _gui.data(), &ownCloudGui::slotShowFileActivityDialog);
+    connect(FolderMan::instance()->socketApi(), &SocketApi::fileActivityCommandReceived, _gui.data(), &ownCloudGui::slotShowFileActivityDialog);
 
-    connect(FolderMan::instance()->socketApi(), &SocketApi::fileActionsCommandReceived,
-            _gui.data(), &ownCloudGui::slotShowFileActionsDialog);
+    connect(FolderMan::instance()->socketApi(), &SocketApi::fileActionsCommandReceived, _gui.data(), &ownCloudGui::slotShowFileActionsDialog);
 
-    connect(FolderMan::instance()->socketApi(), &SocketApi::resolveConflictCommandReceived,
-            _gui.data(), &ownCloudGui::slotResolveConflict);
+    connect(FolderMan::instance()->socketApi(), &SocketApi::resolveConflictCommandReceived, _gui.data(), &ownCloudGui::slotResolveConflict);
 
-    connect(FolderMan::instance()->socketApi(), &SocketApi::moveItemCommandReceived,
-            _gui.data(), &ownCloudGui::slotMoveItem);
+    connect(FolderMan::instance()->socketApi(), &SocketApi::moveItemCommandReceived, _gui.data(), &ownCloudGui::slotMoveItem);
 
     // startup procedure.
     connect(&_checkConnectionTimer, &QTimer::timeout, this, &Application::slotCheckConnection);
@@ -489,16 +529,13 @@ Application::Application(int &argc, char **argv)
     QTimer::singleShot(0, this, &Application::slotCheckConnection);
 
     // Can't use onlineStateChanged because it is always true on modern systems because of many interfaces
-    connect(QNetworkInformation::instance(), &QNetworkInformation::reachabilityChanged,
-        this, &Application::slotSystemOnlineConfigurationChanged);
+    connect(QNetworkInformation::instance(), &QNetworkInformation::reachabilityChanged, this, &Application::slotSystemOnlineConfigurationChanged);
 
 #if defined(BUILD_UPDATER)
     // Update checks
     auto *updaterScheduler = new UpdaterScheduler(this);
-    connect(updaterScheduler, &UpdaterScheduler::updaterAnnouncement,
-        _gui.data(), &ownCloudGui::slotShowTrayUpdateMessage);
-    connect(updaterScheduler, &UpdaterScheduler::requestRestart,
-        _folderManager.data(), &FolderMan::slotScheduleAppRestart);
+    connect(updaterScheduler, &UpdaterScheduler::updaterAnnouncement, _gui.data(), &ownCloudGui::slotShowTrayUpdateMessage);
+    connect(updaterScheduler, &UpdaterScheduler::requestRestart, _folderManager.data(), &FolderMan::slotScheduleAppRestart);
 #endif
 
     // Cleanup at Quit.
@@ -553,8 +590,7 @@ Application::Application(int &argc, char **argv)
     // the system's Background Task Management database rather than in our config, so it can
     // already be registered from a previous version, or switched off by the user — neither of
     // which we can assume either way.
-    qCInfo(lcApplication) << "FinderSync broker login item is"
-                          << Mac::FinderSyncBrokerRegistrar::describe(Mac::FinderSyncBrokerRegistrar::status());
+    qCInfo(lcApplication) << "FinderSync broker login item is" << Mac::FinderSyncBrokerRegistrar::describe(Mac::FinderSyncBrokerRegistrar::status());
 
     switch (Mac::FinderSyncBrokerRegistrar::ensureRegistered()) {
     case Mac::FinderSyncBrokerRegistrar::Status::Enabled:
@@ -610,8 +646,7 @@ Application::Application(int &argc, char **argv)
     });
 
     // Keep extensions in sync as folders are added or removed at runtime.
-    connect(FolderMan::instance(), &FolderMan::folderListChanged,
-            this, [this](const OCC::Folder::Map &folderMap) {
+    connect(FolderMan::instance(), &FolderMan::folderListChanged, this, [this](const OCC::Folder::Map &folderMap) {
         qCDebug(lcApplication) << "Folder list changed, updating FinderSync extension paths...";
 
         QSet<QString> currentPaths;
@@ -638,6 +673,11 @@ Application::Application(int &argc, char **argv)
 
 Application::~Application()
 {
+    if (_privateCloudDirectConnection) {
+        _privateCloudDirectConnection->stop();
+    }
+    delete _privateCloudWindow.data();
+    releasePrivateCloudDrive();
     // Make sure all folders are gone, otherwise removing the
     // accounts will remove the associated folders from the settings.
     if (_folderManager) {
@@ -645,8 +685,7 @@ Application::~Application()
     }
 
     // Remove the account from the account manager so it can be deleted.
-    disconnect(AccountManager::instance(), &AccountManager::accountRemoved,
-        this, &Application::slotAccountStateRemoved);
+    disconnect(AccountManager::instance(), &AccountManager::accountRemoved, this, &Application::slotAccountStateRemoved);
     AccountManager::instance()->shutdown();
 }
 
@@ -678,24 +717,17 @@ void Application::setupAccountsAndFolders()
 
     const auto accounts = AccountManager::instance()->accounts();
     const auto accountsListSize = accounts.size();
-    if (accountsRestoreResult == AccountManager::AccountsRestoreSuccessFromLegacyVersion
-        && accountsListSize > 0
-        && Theme::instance()->displayLegacyImportDialog()
-        && !AccountManager::instance()->forceLegacyImport()) {
-        const auto accountsRestoreMessage = accountsListSize > 1
-            ? tr("%1 accounts", "number of accounts imported").arg(QString::number(accountsListSize))
-            : tr("1 account");
-        const auto foldersRestoreMessage = foldersListSize > 1
-            ? tr("%1 folders", "number of folders imported").arg(QString::number(foldersListSize))
-            : tr("1 folder");
-        const auto messageBox = new QMessageBox(QMessageBox::Information,
-                                                tr("Legacy import"),
-                                                tr("Imported %1 and %2 from a legacy desktop client.\n%3",
-                                                   "number of accounts and folders imported. list of users.")
-                                                    .arg(accountsRestoreMessage,
-                                                         foldersRestoreMessage,
-                                                         prettyNamesList(accounts))
-                                                );
+    if (accountsRestoreResult == AccountManager::AccountsRestoreSuccessFromLegacyVersion && accountsListSize > 0
+        && Theme::instance()->displayLegacyImportDialog() && !AccountManager::instance()->forceLegacyImport()) {
+        const auto accountsRestoreMessage =
+            accountsListSize > 1 ? tr("%1 accounts", "number of accounts imported").arg(QString::number(accountsListSize)) : tr("1 account");
+        const auto foldersRestoreMessage =
+            foldersListSize > 1 ? tr("%1 folders", "number of folders imported").arg(QString::number(foldersListSize)) : tr("1 folder");
+        const auto messageBox =
+            new QMessageBox(QMessageBox::Information,
+                            tr("Legacy import"),
+                            tr("Imported %1 and %2 from a legacy desktop client.\n%3", "number of accounts and folders imported. list of users.")
+                                .arg(accountsRestoreMessage, foldersRestoreMessage, prettyNamesList(accounts)));
         messageBox->setWindowModality(Qt::NonModal);
         messageBox->open();
     }
@@ -703,6 +735,436 @@ void Application::setupAccountsAndFolders()
     qCWarning(lcApplication) << "Account(s) setup result:" << accountsRestoreResult;
     qCWarning(lcApplication) << foldersListSize << "folder(s) migrated";
     qCWarning(lcApplication) << accountsListSize << "account(s) migrated:" << prettyNamesList(accounts);
+}
+
+void Application::restorePrivateCloudDrive()
+{
+    if (!PrivateCloudDrive::isEnabled() || !_folderManager || _privateCloudQuitReady
+        || (_privateCloudAccountSwitch && _privateCloudAccountSwitch->isRunning())) {
+        return;
+    }
+
+    QString path;
+    QString identity;
+    QString error;
+    const auto folders = _folderManager->map();
+    if (folders.size() > 1) {
+        error = tr("privateCloud requires exactly one configured sync folder.");
+    }
+    for (const auto &folder : folders) {
+        if (!error.isEmpty()) {
+            break;
+        }
+        if (folder->accountState()->isSignedOut()) {
+            continue;
+        }
+        const auto account = folder->accountState()->account();
+        identity = account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + account->davUser();
+        // The worker checks the account-bound backing path and storage before
+        // publishing a ready drive. Avoid repeating those native probes here.
+        if (folder->remotePath() == QStringLiteral("/") && folder->vfs().mode() == Vfs::WindowsCfApi) {
+            if (folder->privateCloudSetupPending()) {
+                if (!_privateCloudResumeAttempted) {
+                    _privateCloudResumeAttempted = true;
+                    OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
+                }
+                return;
+            }
+            path = folder->path();
+            if (!folder->vfs().isReady()) {
+                error = tr("Windows Files On-Demand is unavailable. Select Retry to reconnect the drive.");
+            }
+            break;
+        }
+        error = tr("The configured sync folder does not match this privateCloud account.");
+    }
+
+    if (path.isEmpty() || !error.isEmpty()) {
+        _privateCloudDriveError = error;
+        _privateCloudDriveController->release(_privateCloudDrivePath);
+        _privateCloudDrivePath.clear();
+        schedulePrivateCloudStatusUpdate();
+        return;
+    }
+    _privateCloudDriveError.clear();
+    const auto forceCheck = _privateCloudForceDriveCheck;
+    _privateCloudForceDriveCheck = false;
+    _privateCloudDriveController->prepare(path, forceCheck, identity);
+    schedulePrivateCloudStatusUpdate();
+}
+
+void Application::releasePrivateCloudDrive()
+{
+    if (!PrivateCloudDrive::isEnabled()) {
+        return;
+    }
+    if (_privateCloudDriveController) {
+        _privateCloudDriveController->release(_privateCloudDrivePath);
+    }
+    _privateCloudDrivePath.clear();
+}
+
+void Application::setupPrivateCloudWindow()
+{
+    _privateCloudWindow = new PrivateCloudWindow;
+    _privateCloudDriveController = new PrivateCloudDriveController(this);
+    connect(_privateCloudDriveController, &PrivateCloudDriveController::changed, this, [this] {
+        _privateCloudDrivePath = _privateCloudDriveController->readyPath();
+        if (!_privateCloudDrivePath.isEmpty()) {
+            _privateCloudDriveError.clear();
+            if (_privateCloudOpenWhenReady) {
+                _privateCloudOpenWhenReady = false;
+                openPrivateCloudDrive();
+            }
+        }
+        schedulePrivateCloudStatusUpdate();
+    });
+    _privateCloudAccountSwitch = new PrivateCloudAccountSwitch(this);
+    connect(_privateCloudAccountSwitch, &PrivateCloudAccountSwitch::readyToRemove, this, [this] {
+        const auto action = _privateCloudPendingAction;
+        _privateCloudPendingAction = PrivateCloudPendingAction::None;
+        if (action == PrivateCloudPendingAction::Quit) {
+            _privateCloudAccountSwitch->discardSyncScheduling();
+            _privateCloudQuitReady = true;
+            QTimer::singleShot(0, this, &QCoreApplication::quit);
+        } else if (action == PrivateCloudPendingAction::ChangeAccount) {
+            finishPrivateCloudAccountChange();
+        }
+    });
+    connect(_privateCloudAccountSwitch, &PrivateCloudAccountSwitch::timedOut, this, [this] {
+        resumePrivateCloudFileRequests();
+        const auto action = _privateCloudPendingAction;
+        _privateCloudPendingAction = PrivateCloudPendingAction::None;
+        _privateCloudAccountBeingRemoved.clear();
+        _privateCloudDriveError = action == PrivateCloudPendingAction::Quit
+            ? tr("A file operation is still finishing. privateCloud is still running. Try Quit again shortly.")
+            : tr("A file operation is still finishing. Your account has been kept. Try changing accounts again shortly.");
+        showMainDialog();
+    });
+    _privateCloudStatusTimer.setSingleShot(true);
+    constexpr int statusRefreshDelayMs = 100;
+    _privateCloudStatusTimer.setInterval(statusRefreshDelayMs);
+    connect(&_privateCloudStatusTimer, &QTimer::timeout, this, &Application::updatePrivateCloudStatus);
+    connect(_folderManager.data(), &FolderMan::folderSyncStateChange, this, &Application::schedulePrivateCloudStatusUpdate);
+    connect(_folderManager.data(), &FolderMan::folderListChanged, this, &Application::schedulePrivateCloudStatusUpdate);
+    connect(_privateCloudWindow.data(), &PrivateCloudWindow::openDriveRequested, this, &Application::openPrivateCloudDrive);
+    connect(_privateCloudWindow.data(), &PrivateCloudWindow::retryRequested, this, &Application::retryPrivateCloudConnection);
+    connect(_privateCloudWindow.data(), &PrivateCloudWindow::reviewFilesRequested, this, &Application::reviewPrivateCloudFiles);
+    connect(_privateCloudWindow.data(), &PrivateCloudWindow::signOutRequested, this, &Application::signOutPrivateCloud);
+    connect(_privateCloudWindow.data(), &PrivateCloudWindow::changeAccountRequested, this, &Application::changePrivateCloudAccount);
+    connect(_privateCloudWindow.data(), &PrivateCloudWindow::quitRequested, this, &Application::requestQuit);
+    connect(ProgressDispatcher::instance(), &ProgressDispatcher::progressInfo, this, [this](const QString &folder, const ProgressInfo &progress) {
+        _privateCloudProgress.insert(folder, PrivateCloudStatus::captureProgress(progress));
+        schedulePrivateCloudStatusUpdate();
+    });
+    connect(ProgressDispatcher::instance(), &ProgressDispatcher::folderConflicts, this, [this](const QString &folder, const QStringList &paths) {
+        _privateCloudConflicts.insert(folder, paths);
+        schedulePrivateCloudStatusUpdate();
+    });
+    connect(_folderManager.data(), &FolderMan::folderListChanged, this, [this] {
+        _privateCloudProgress.clear();
+        _privateCloudConflicts.clear();
+    });
+    constexpr auto driveRecoveryIntervalMs = 30000;
+    _privateCloudRecoveryTimer.setInterval(driveRecoveryIntervalMs);
+    connect(&_privateCloudRecoveryTimer, &QTimer::timeout, this, [this] {
+        // Network reconnection is already managed by AccountState. Recover only
+        // a missing drive here, without unpausing or forcing a full sync.
+        if (_privateCloudDrivePath.isEmpty() && !_privateCloudDriveController->isBusy()) {
+            restorePrivateCloudDrive();
+        } else if (!_privateCloudDrivePath.isEmpty() && !PrivateCloudDrive::isMapped(_privateCloudDrivePath)) {
+            _privateCloudDrivePath.clear();
+            _privateCloudForceDriveCheck = true;
+            restorePrivateCloudDrive();
+        }
+    });
+    _privateCloudRecoveryTimer.start();
+    updatePrivateCloudStatus();
+}
+
+void Application::openPrivateCloudDrive()
+{
+    if (!_privateCloudDrivePath.isEmpty() && _privateCloudDriveController && !_privateCloudDriveController->readyPath().isEmpty()
+        && PrivateCloudDrive::isMapped(_privateCloudDrivePath)) {
+        if (QDesktopServices::openUrl(QUrl::fromLocalFile(PrivateCloudDrive::driveRoot()))) {
+            return;
+        }
+        _privateCloudDriveError = tr("Windows could not open privateCloud. Reconnect the drive and try again.");
+    }
+    showMainDialog();
+    _privateCloudForceDriveCheck = true;
+    QTimer::singleShot(0, this, &Application::restorePrivateCloudDrive);
+}
+
+void Application::reviewPrivateCloudFiles()
+{
+    for (const auto &folder : _folderManager->map()) {
+        const auto paths = _privateCloudConflicts.value(folder->alias());
+        if (paths.isEmpty()) {
+            continue;
+        }
+        auto dialog = new PrivateCloudIssuesDialog(folder->path(), paths, _privateCloudWindow);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dialog, &PrivateCloudIssuesDialog::revealRequested, dialog, [](const QString &path) {
+#ifdef Q_OS_WIN
+            (void)QtConcurrent::run([path] {
+                showInFileManager(path);
+            });
+#else
+            showInFileManager(path);
+#endif
+        });
+        dialog->show();
+        return;
+    }
+    openPrivateCloudDrive();
+}
+
+void Application::schedulePrivateCloudStatusUpdate()
+{
+    if (_privateCloudWindow && !_privateCloudStatusTimer.isActive()) {
+        _privateCloudStatusTimer.start();
+    }
+}
+
+void Application::updatePrivateCloudStatus()
+{
+    if (!_privateCloudWindow) {
+        return;
+    }
+    PrivateCloudStatus::Input input;
+    if (_privateCloudDirectConnection) {
+        input.directConnectionPending = !_privateCloudDirectConnection->isReady();
+        input.directConnectionError = _privateCloudDirectConnection->lastError();
+    }
+    const auto accounts = AccountManager::instance()->accounts();
+    if (!accounts.isEmpty()) {
+        const auto state = accounts.first();
+        const auto account = state->account();
+        PrivateCloudStatus::populateAccountIdentity(input, account);
+        input.connectionState = state->state();
+        input.connectionErrors = state->connectionErrors();
+        input.driveError = _privateCloudDriveError.isEmpty() ? _privateCloudDriveController->error() : _privateCloudDriveError;
+        input.drivePreparing = _privateCloudDriveController->isBusy();
+        input.driveAvailable = !_privateCloudDrivePath.isEmpty() && PrivateCloudDrive::isMapped(_privateCloudDrivePath);
+        input.busy = _privateCloudAccountSwitch->isRunning();
+        input.busyDetail = _privateCloudPendingAction == PrivateCloudPendingAction::Quit
+            ? tr("Finishing current file operations before quitting.")
+            : tr("Finishing current file operations before changing accounts. Your cached files will be kept.");
+        for (const auto &folder : _folderManager->map()) {
+            if (folder->accountState() != state.data()) {
+                continue;
+            }
+            const auto result = folder->syncResult();
+            input.folderConfigured = true;
+            input.setupPending = folder->privateCloudSetupPending();
+            input.paused = folder->syncPaused();
+            input.syncRunning = folder->isSyncRunning();
+            input.syncStatus = result.status();
+            input.conflictCount = result.numNewConflictItems() + result.numOldConflictItems();
+            input.errorCount = result.numErrorItems();
+            input.syncErrors = result.errorStrings();
+            if (result.firstItemError()) {
+                input.firstItemError = result.firstItemError()->_file + QLatin1Char('\n') + result.firstItemError()->_errorString;
+            }
+            input.progress = _privateCloudProgress.value(folder->alias());
+            break;
+        }
+    }
+    const auto presentation = PrivateCloudStatus::present(input);
+    _privateCloudWindow->setStatus(presentation.accountName,
+                                   PrivateCloudDrive::driveRoot(),
+                                   presentation.status,
+                                   presentation.detail,
+                                   presentation.driveAvailable);
+    _privateCloudWindow->setBusy(presentation.busy);
+    if (_gui) {
+        _gui->setPrivateCloudStatus(_privateCloudWindow->statusSummary());
+    }
+}
+
+void Application::retryPrivateCloudConnection()
+{
+    if (_privateCloudAccountSwitch->isRunning()) {
+        return;
+    }
+    if (_privateCloudDirectConnection && !_privateCloudDirectConnection->isReady()) {
+        _privateCloudDirectConnection->stop();
+        _privateCloudDirectConnection->start();
+        schedulePrivateCloudStatusUpdate();
+        return;
+    }
+    _privateCloudDriveError.clear();
+    const auto accounts = AccountManager::instance()->accounts();
+    if (accounts.isEmpty()) {
+        OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
+        return;
+    }
+    auto setupIncomplete = _folderManager->map().isEmpty();
+    for (const auto &folder : _folderManager->map()) {
+        setupIncomplete = setupIncomplete || folder->privateCloudSetupPending();
+    }
+    if (setupIncomplete) {
+        OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
+        return;
+    }
+    for (const auto &state : accounts) {
+        if (state->isSignedOut()) {
+            state->signIn();
+        } else if (state->state() != AccountState::AskingCredentials && !state->isConnected()) {
+            state->freshConnectionAttempt();
+        }
+    }
+    for (const auto &folder : _folderManager->map()) {
+        const auto retrySync =
+            PrivateCloudStatus::shouldRetrySync(folder->accountState()->state(), folder->syncResult().status(), folder->syncResult().numErrorItems());
+        const auto retrySetup = retrySync && folder->syncResult().status() == SyncResult::SetupError;
+        if ((!folder->vfs().isReady() || retrySetup) && !folder->ensureVfsReady()) {
+            continue;
+        }
+        if (retrySetup) {
+            folder->prepareToSync();
+        }
+        if (folder->syncPaused()) {
+            folder->setSyncPaused(false);
+            folder->scheduleThisFolderSoon();
+        } else if (retrySync) {
+            folder->scheduleThisFolderSoon();
+        }
+        if (folder->vfs().isReady() && !folder->accountState()->isSignedOut()) {
+            const auto account = folder->accountState()->account();
+            const QString identity = account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + account->davUser();
+            _privateCloudDriveController->prepare(folder->path(), true, identity);
+        }
+    }
+    restorePrivateCloudDrive();
+    updatePrivateCloudStatus();
+}
+
+void Application::signOutPrivateCloud()
+{
+    _privateCloudOpenWhenReady = false;
+    for (const auto &state : AccountManager::instance()->accounts()) {
+        state->signOutByUi();
+    }
+    releasePrivateCloudDrive();
+    AccountManager::instance()->save();
+    updatePrivateCloudStatus();
+}
+
+void Application::changePrivateCloudAccount()
+{
+    const auto accounts = AccountManager::instance()->accounts();
+    if (accounts.size() != 1 || _privateCloudAccountSwitch->isRunning()) {
+        return;
+    }
+    if (UserModel::instance()->findUserIdForAccount(accounts.first().data()) < 0) {
+        _privateCloudDriveError = tr("The account connection is unavailable. Restart privateCloud before changing accounts.");
+        updatePrivateCloudStatus();
+        return;
+    }
+    _privateCloudAccountBeingRemoved = accounts.first().data();
+    waitForPrivateCloudOperations(PrivateCloudPendingAction::ChangeAccount);
+}
+
+void Application::requestQuit()
+{
+    if (!PrivateCloudDrive::isEnabled() || !_privateCloudAccountSwitch || !_folderManager) {
+        QCoreApplication::quit();
+        return;
+    }
+    _privateCloudAccountBeingRemoved.clear();
+    waitForPrivateCloudOperations(PrivateCloudPendingAction::Quit);
+}
+
+void Application::waitForPrivateCloudOperations(PrivateCloudPendingAction action)
+{
+    _privateCloudPendingAction = action;
+    if (!_privateCloudAccountSwitch->isRunning()) {
+        _privateCloudOpenWhenReady = false;
+        releasePrivateCloudDrive();
+        _privateCloudAccountSwitch->suspendSyncScheduling(_folderManager->isSyncEnabled(), [manager = _folderManager](bool enabled) {
+            if (manager) {
+                manager->setSyncEnabled(enabled);
+            }
+        });
+        for (const auto &folder : _folderManager->map()) {
+            folder->slotTerminateSync();
+        }
+        // A native recycle operation can require hydration callbacks to finish.
+        // Keep the provider, credentials and event loop available until it stops.
+        _privateCloudAccountSwitch->start([this] {
+            if (_privateCloudDriveController && !_privateCloudDriveController->isReleased()) {
+                return true;
+            }
+            if (OwncloudPropagator::hasPendingLocalFileOperations()) {
+                return true;
+            }
+            for (const auto &folder : _folderManager->map()) {
+                if (folder->isSyncRunning()) {
+                    return true;
+                }
+            }
+            // Close the native request gate only after local workers no longer
+            // need to hydrate files. Existing callbacks can still use the UI.
+            for (const auto &folder : _folderManager->map()) {
+                folder->vfs().setShutdownRequested(true);
+            }
+            for (const auto &folder : _folderManager->map()) {
+                if (folder->vfs().hasPendingFileOperations()) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    }
+    if (_privateCloudAccountSwitch->isRunning()) {
+        showMainDialog();
+    }
+}
+
+void Application::resumePrivateCloudFileRequests()
+{
+    for (const auto &folder : _folderManager->map()) {
+        folder->vfs().setShutdownRequested(false);
+    }
+    _privateCloudAccountSwitch->restoreSyncScheduling();
+}
+
+void Application::finishPrivateCloudAccountChange()
+{
+    const auto accounts = AccountManager::instance()->accounts();
+    if (accounts.size() != 1 || accounts.first().data() != _privateCloudAccountBeingRemoved.data()) {
+        resumePrivateCloudFileRequests();
+        _privateCloudAccountBeingRemoved.clear();
+        updatePrivateCloudStatus();
+        return;
+    }
+    const auto userModel = UserModel::instance();
+    const auto userId = userModel->findUserIdForAccount(accounts.first().data());
+    if (userId < 0) {
+        resumePrivateCloudFileRequests();
+        _privateCloudAccountBeingRemoved.clear();
+        _privateCloudDriveError = tr("The account connection changed. Restart privateCloud before trying again.");
+        updatePrivateCloudStatus();
+        return;
+    }
+    // Remove only connection configuration. Retain cached files, partial
+    // downloads and the journal in the account-specific backing folder.
+    _privateCloudAccountSwitch->discardSyncScheduling();
+    for (const auto &folder : _folderManager->map()) {
+        folder->removeFromSettings();
+        folder->vfs().stop();
+        folder->vfs().unregisterFolder();
+    }
+    _folderManager->unloadAndDeleteAllFolders();
+    _privateCloudResumeAttempted = false;
+    _privateCloudAccountBeingRemoved.clear();
+    _privateCloudProgress.clear();
+    _privateCloudConflicts.clear();
+    userModel->removeAccountConnection(userId);
+    AccountManager::instance()->save();
+    updatePrivateCloudStatus();
 }
 
 void Application::showMainDialogRemoteCommand()
@@ -714,7 +1176,7 @@ void Application::showMainDialogRemoteCommand()
         return;
     }
 
-           // Show the main dialog only if there is at least one account configured
+    // Show the main dialog only if there is at least one account configured
     if (!AccountManager::instance()->accounts().isEmpty()) {
         showMainDialog();
     } else {
@@ -747,9 +1209,9 @@ void Application::parseOptionsRemoteCommand(const QStringList &options)
 void Application::setupConfigFile()
 {
     // Migrate from version <= 2.4
-    setApplicationName(_theme->appNameGUI());
+    setApplicationName(QStringLiteral(APPLICATION_NAME));
 #ifndef QT_WARNING_DISABLE_DEPRECATED // Was added in Qt 5.9
-    #define QT_WARNING_DISABLE_DEPRECATED QT_WARNING_DISABLE_GCC("-Wdeprecated-declarations")
+#define QT_WARNING_DISABLE_DEPRECATED QT_WARNING_DISABLE_GCC("-Wdeprecated-declarations")
 #endif
     QT_WARNING_PUSH
     QT_WARNING_DISABLE_DEPRECATED
@@ -783,7 +1245,7 @@ void Application::setupConfigFile()
             const QStringList filesList = QDir(oldDir).entryList(QDir::Files);
             qCDebug(lcApplication) << "Will move the individual files" << filesList;
             for (const auto &name : filesList) {
-                if (!QFile::rename(oldDir + "/" + name,  confDir + "/" + name)) {
+                if (!QFile::rename(oldDir + "/" + name, confDir + "/" + name)) {
                     qCDebug(lcApplication) << "Fallback move of " << name << "also failed";
                 }
             }
@@ -801,23 +1263,19 @@ AccountManager::AccountsRestoreResult Application::restoreLegacyAccount()
     ConfigFile cfg;
     const auto tryMigrate = cfg.overrideServerUrl().isEmpty();
     auto accountsRestoreResult = AccountManager::AccountsRestoreFailure;
-    if (accountsRestoreResult = AccountManager::instance()->restore(tryMigrate);
-        accountsRestoreResult == AccountManager::AccountsRestoreFailure) {
+    if (accountsRestoreResult = AccountManager::instance()->restore(tryMigrate); accountsRestoreResult == AccountManager::AccountsRestoreFailure) {
         // If there is an error reading the account settings, try again
         // after a couple of seconds, if that fails, give up.
         // (non-existence is not an error)
         Utility::sleep(5);
-        if (accountsRestoreResult = AccountManager::instance()->restore(tryMigrate);
-            accountsRestoreResult == AccountManager::AccountsRestoreFailure) {
+        if (accountsRestoreResult = AccountManager::instance()->restore(tryMigrate); accountsRestoreResult == AccountManager::AccountsRestoreFailure) {
             qCCritical(lcApplication) << "Could not read the account settings, quitting";
-            QMessageBox::critical(
-                nullptr,
-                tr("Error accessing the configuration file"),
-                tr("There was an error while accessing the configuration "
-                   "file at %1. Please make sure the file can be accessed by your system account.")
-                    .arg(ConfigFile().configFile()),
-                QMessageBox::Ok
-            );
+            QMessageBox::critical(nullptr,
+                                  tr("Error accessing the configuration file"),
+                                  tr("There was an error while accessing the configuration "
+                                     "file at %1. Please make sure the file can be accessed by your system account.")
+                                      .arg(ConfigFile().configFile()),
+                                  QMessageBox::Ok);
             QTimer::singleShot(0, qApp, &QCoreApplication::quit);
         }
     }
@@ -826,45 +1284,68 @@ AccountManager::AccountsRestoreResult Application::restoreLegacyAccount()
 
 void Application::slotAccountStateRemoved(AccountState *accountState)
 {
+    schedulePrivateCloudStatusUpdate();
+    if (PrivateCloudDrive::isEnabled()) {
+        releasePrivateCloudDrive();
+    }
     if (_gui) {
-        disconnect(accountState, &AccountState::stateChanged,
-            _gui.data(), &ownCloudGui::slotComputeOverallSyncStatus);
-        disconnect(accountState->account().data(), &Account::serverVersionChanged,
-            _gui.data(), &ownCloudGui::slotTrayMessageIfServerUnsupported);
+        disconnect(accountState, &AccountState::stateChanged, _gui.data(), &ownCloudGui::slotComputeOverallSyncStatus);
+        disconnect(accountState->account().data(), &Account::serverVersionChanged, _gui.data(), &ownCloudGui::slotTrayMessageIfServerUnsupported);
     }
     if (_folderManager) {
-        disconnect(accountState, &AccountState::stateChanged,
-            _folderManager.data(), &FolderMan::slotAccountStateChanged);
-        disconnect(accountState->account().data(), &Account::serverVersionChanged,
-            _folderManager.data(), &FolderMan::slotServerVersionChanged);
+        disconnect(accountState, &AccountState::stateChanged, _folderManager.data(), &FolderMan::slotAccountStateChanged);
+        disconnect(accountState->account().data(), &Account::serverVersionChanged, _folderManager.data(), &FolderMan::slotServerVersionChanged);
     }
 
     // if there is no more account, show the wizard.
     if (_gui && AccountManager::instance()->accounts().isEmpty()) {
         // allow to add a new account if there is non any more. Always think
         // about single account theming!
-        OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
+        if (PrivateCloudDrive::isEnabled()) {
+            // Let UserModel finish dropping the old account before opening login.
+            QTimer::singleShot(0, this, [this] {
+                OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
+            });
+        } else {
+            OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
+        }
     }
 }
 
 void Application::slotAccountStateAdded(AccountState *accountState)
 {
-    connect(accountState, &AccountState::stateChanged,
-        _gui.data(), &ownCloudGui::slotComputeOverallSyncStatus);
-    connect(accountState->account().data(), &Account::serverVersionChanged,
-        _gui.data(), &ownCloudGui::slotTrayMessageIfServerUnsupported);
-    connect(accountState, &AccountState::termsOfServiceChanged,
-            _gui.data(), &ownCloudGui::slotNeedToAcceptTermsOfService);
-    connect(accountState, &AccountState::stateChanged,
-        _folderManager.data(), &FolderMan::slotAccountStateChanged);
-    connect(accountState->account().data(), &Account::serverVersionChanged,
-        _folderManager.data(), &FolderMan::slotServerVersionChanged);
+    if (PrivateCloudDrive::isEnabled()) {
+        connect(accountState, &AccountState::stateChanged, this, [this, accountState] {
+            if (accountState->isSignedOut()) {
+                releasePrivateCloudDrive();
+            } else {
+                QTimer::singleShot(0, this, &Application::restorePrivateCloudDrive);
+            }
+            schedulePrivateCloudStatusUpdate();
+        });
+        connect(accountState, &AccountState::statusChanged, this, &Application::schedulePrivateCloudStatusUpdate);
+        schedulePrivateCloudStatusUpdate();
+    }
+    connect(accountState, &AccountState::stateChanged, _gui.data(), &ownCloudGui::slotComputeOverallSyncStatus);
+    connect(accountState->account().data(), &Account::serverVersionChanged, _gui.data(), &ownCloudGui::slotTrayMessageIfServerUnsupported);
+    connect(accountState, &AccountState::termsOfServiceChanged, _gui.data(), &ownCloudGui::slotNeedToAcceptTermsOfService);
+    connect(accountState, &AccountState::stateChanged, _folderManager.data(), &FolderMan::slotAccountStateChanged);
+    connect(accountState->account().data(), &Account::serverVersionChanged, _folderManager.data(), &FolderMan::slotServerVersionChanged);
 
     _gui->slotTrayMessageIfServerUnsupported(accountState->account());
 }
 
 void Application::slotCleanup()
 {
+    _privateCloudStatusTimer.stop();
+    _privateCloudRecoveryTimer.stop();
+    if (_privateCloudAccountSwitch) {
+        _privateCloudAccountSwitch->cancel();
+    }
+    if (_privateCloudWindow) {
+        _privateCloudWindow->hide();
+    }
+    releasePrivateCloudDrive();
     AccountManager::instance()->save();
     FolderMan::instance()->unloadAndDeleteAllFolders();
 
@@ -877,11 +1358,14 @@ void Application::slotCleanup()
 // Maybe we need 2 validators, one triggered by timer, one by network configuration changes?
 void Application::slotSystemOnlineConfigurationChanged()
 {
-    if (QNetworkInformation::instance()->reachability() == QNetworkInformation::Reachability::Site ||
-            QNetworkInformation::instance()->reachability() == QNetworkInformation::Reachability::Online) {
+    if (QNetworkInformation::instance()->reachability() == QNetworkInformation::Reachability::Site
+        || QNetworkInformation::instance()->reachability() == QNetworkInformation::Reachability::Online) {
         const auto list = AccountManager::instance()->accounts();
         for (const auto &accountState : list) {
             accountState->systemOnlineConfigurationChanged();
+        }
+        if (PrivateCloudDrive::isEnabled()) {
+            QTimer::singleShot(0, this, &Application::restorePrivateCloudDrive);
         }
     }
 }
@@ -896,7 +1380,11 @@ void Application::slotCheckConnection()
         }
 
         // let gui open the setup wizard
-        _gui->slotOpenSettingsDialog();
+        if (PrivateCloudDrive::isEnabled()) {
+            OwncloudSetupWizard::runWizard(this, SLOT(slotownCloudWizardDone(int)));
+        } else {
+            _gui->slotOpenSettingsDialog();
+        }
 
         _checkConnectionTimer.stop(); // don't popup the wizard on interval;
     }
@@ -919,9 +1407,22 @@ void Application::slotownCloudWizardDone(int res)
         _checkConnectionTimer.start();
         slotCheckConnection();
 
-        Utility::setLaunchOnStartup(_theme->appName(), _theme->appNameGUI(), true);
+        if (!PrivateCloudDrive::isEnabled() || qEnvironmentVariable("PRIVATECLOUD_MANAGED_STARTUP") != QStringLiteral("1")) {
+            Utility::setLaunchOnStartup(_theme->appName(), _theme->appNameGUI(), true);
+        }
 
-        Systray::instance()->showTrayPopup();
+        if (PrivateCloudDrive::isEnabled()) {
+            _privateCloudOpenWhenReady = true;
+            restorePrivateCloudDrive();
+            if (!_privateCloudDrivePath.isEmpty()) {
+                _privateCloudOpenWhenReady = false;
+                openPrivateCloudDrive();
+            } else {
+                showMainDialog();
+            }
+        } else {
+            Systray::instance()->showTrayPopup();
+        }
     }
 }
 
@@ -953,12 +1454,8 @@ void Application::setupLogging()
     logger->enterNextLogFile(QStringLiteral("nextcloud.log"), OCC::Logger::LogType::Log);
     logger->enterNextLogFile(QStringLiteral("permanent_delete.log"), OCC::Logger::LogType::DeleteLog);
 
-    qCInfo(lcApplication) << "##################" << _theme->appName()
-                          << "locale:" << QLocale::system().name()
-                          << "ui_lang:" << property("ui_lang")
-                          << "version:" << _theme->version()
-                          << "os:" << Utility::platformName()
-                          << "platform:" << QApplication::platformName();
+    qCInfo(lcApplication) << "##################" << _theme->appName() << "locale:" << QLocale::system().name() << "ui_lang:" << property("ui_lang")
+                          << "version:" << _theme->version() << "os:" << Utility::platformName() << "platform:" << QApplication::platformName();
     qCInfo(lcApplication) << "Arguments:" << qApp->arguments();
 }
 
@@ -998,7 +1495,7 @@ void Application::parseOptions(const QStringList &options)
 
     bool shouldExit = false;
 
-    //parse options; if help or bad option exit
+    // parse options; if help or bad option exit
     while (it.hasNext()) {
         QString option = it.next();
         if (option == QLatin1String("--help") || option == QLatin1String("-h")) {
@@ -1050,13 +1547,13 @@ void Application::parseOptions(const QStringList &options)
             setLayoutDirection(layoutDirection() == Qt::LeftToRight ? Qt::RightToLeft : Qt::LeftToRight);
         } else if (option.endsWith(QStringLiteral(APPLICATION_DOTVIRTUALFILE_SUFFIX))) {
             // virtual file, open it after the Folder were created (if the app is not terminated)
-            QTimer::singleShot(0, this, [this, option] { openVirtualFile(option); });
+            QTimer::singleShot(0, this, [this, option] {
+                openVirtualFile(option);
+            });
         } else if (option.startsWith(QStringLiteral(APPLICATION_URI_HANDLER_SCHEME "://"))) {
             _uriSchemeUrl = QUrl{option};
             qCInfo(lcApplication) << "Command line contains custom URI scheme request:"
-                                  << "scheme=" << _uriSchemeUrl.scheme()
-                                  << "host=" << _uriSchemeUrl.host()
-                                  << "path=" << _uriSchemeUrl.path();
+                                  << "scheme=" << _uriSchemeUrl.scheme() << "host=" << _uriSchemeUrl.host() << "path=" << _uriSchemeUrl.path();
             if (!_uriSchemeUrl.isValid()) {
                 _uriSchemeUrl.clear();
                 const auto errorParsingUri = QStringLiteral("The supplied url '%1' is invalid!").arg(option);
@@ -1068,7 +1565,10 @@ void Application::parseOptions(const QStringList &options)
                 const auto overrideUrl = it.next();
                 const auto isUrlValid = (overrideUrl.startsWith(QStringLiteral("http://")) || overrideUrl.startsWith(QStringLiteral("https://")))
                     && QUrl::fromUserInput(overrideUrl).isValid();
-                if (!isUrlValid) {
+                if (!Account::isServerUrlAllowed(QUrl(overrideUrl))) {
+                    showHint("This client cannot change its configured server address.");
+                    shouldExit = true;
+                } else if (!isUrlValid) {
                     showHint("Invalid URL passed to --overrideserverurl");
                     shouldExit = true;
                 } else {
@@ -1140,13 +1640,9 @@ void Application::showHelp()
     setHelp();
     QString helpText;
     QTextStream stream(&helpText);
-    stream << _theme->appName()
-           << QLatin1String(" version ")
-           << _theme->version() << Qt::endl;
+    stream << _theme->appNameGUI() << QLatin1String(" version ") << _theme->version() << Qt::endl;
 
-    stream << QLatin1String("File synchronisation desktop utility.") << Qt::endl
-           << Qt::endl
-           << QLatin1String(optionsC);
+    stream << QLatin1String("File synchronisation desktop utility.") << Qt::endl << Qt::endl << QLatin1String(optionsC);
 
     displayHelpText(helpText);
 }
@@ -1213,8 +1709,7 @@ void Application::handleUriFromOptions()
 bool Application::handleUriSchemeRequest(const QUrl &url)
 {
     const auto parsedUri = UriSchemeHandler::parseUri(url);
-    const auto suppressEmptyAccountCheck = parsedUri.action == UriSchemeHandler::Action::Login
-        && AccountManager::instance()->accounts().isEmpty();
+    const auto suppressEmptyAccountCheck = parsedUri.action == UriSchemeHandler::Action::Login && AccountManager::instance()->accounts().isEmpty();
     const auto wasCheckConnectionTimerActive = _checkConnectionTimer.isActive();
     if (suppressEmptyAccountCheck) {
         _suppressNextEmptyAccountCheck = true;
@@ -1260,7 +1755,7 @@ void Application::setupTranslations()
     qCInfo(lcApplication) << "System UI languages are:" << QLocale::system().uiLanguages();
     auto choosenLanguage = enforcedLanguage();
     if (choosenLanguage.isEmpty()) {
-        for(const auto &localeToTest : QLocale::system().uiLanguages(QLocale::TagSeparator::Underscore)){
+        for (const auto &localeToTest : QLocale::system().uiLanguages(QLocale::TagSeparator::Underscore)) {
             const auto trFile = QString{QLatin1String{"client_"} + localeToTest};
             qCDebug(lcApplication()) << "trying to load" << localeToTest << "in" << trFile << "from" << trPath;
             if (translator->load(trFile, trPath)) {
@@ -1337,6 +1832,15 @@ bool Application::versionOnly()
 
 void Application::showMainDialog()
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        if (_privateCloudWindow) {
+            updatePrivateCloudStatus();
+            _privateCloudWindow->showNormal();
+            _privateCloudWindow->raise();
+            _privateCloudWindow->activateWindow();
+        }
+        return;
+    }
     _gui->slotOpenMainDialog();
 }
 
@@ -1378,25 +1882,31 @@ void Application::tryTrayAgain()
 
 bool Application::event(QEvent *event)
 {
+    if (event->type() == QEvent::Quit && PrivateCloudDrive::isEnabled() && _privateCloudAccountSwitch && !_privateCloudQuitReady) {
+        event->ignore();
+        requestQuit();
+        return true;
+    }
     if (event->type() == QEvent::FileOpen) {
         const auto openEvent = dynamic_cast<QFileOpenEvent *>(event);
         qCDebug(lcApplication) << "macOS: Received a QFileOpenEvent";
 
-        if(!openEvent->file().isEmpty()) {
+        if (!openEvent->file().isEmpty()) {
             qCDebug(lcApplication) << "QFileOpenEvent" << openEvent->file();
             // virtual file, open it after the Folder were created (if the app is not terminated)
             const auto fn = openEvent->file();
-            QTimer::singleShot(0, this, [this, fn] { openVirtualFile(fn); });
+            QTimer::singleShot(0, this, [this, fn] {
+                openVirtualFile(fn);
+            });
         } else if (!openEvent->url().isEmpty() && openEvent->url().isValid()) {
             // On macOS, Qt does not handle receiving a custom URI as it does on other systems (as an application argument).
             // Instead, it sends out a QFileOpenEvent. We therefore need custom handling for our URI handling on macOS.
             qCInfo(lcApplication) << "macOS QFileOpenEvent contains custom URI scheme request:"
-                                  << "scheme=" << openEvent->url().scheme()
-                                  << "host=" << openEvent->url().host()
-                                  << "path=" << openEvent->url().path();
+                                  << "scheme=" << openEvent->url().scheme() << "host=" << openEvent->url().host() << "path=" << openEvent->url().path();
             handleUriSchemeRequest(openEvent->url());
         } else {
-            const auto errorParsingLocalFileEditingUrl = QStringLiteral("The supplied url for local file editing '%1' is invalid!").arg(openEvent->url().toString());
+            const auto errorParsingLocalFileEditingUrl =
+                QStringLiteral("The supplied url for local file editing '%1' is invalid!").arg(openEvent->url().toString());
             qCInfo(lcApplication) << errorParsingLocalFileEditingUrl;
             showHint(errorParsingLocalFileEditingUrl.toStdString());
         }

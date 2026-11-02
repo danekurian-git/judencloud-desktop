@@ -14,7 +14,8 @@ Q_LOGGING_CATEGORY(lcNetworkHttp, "sync.httplogger", QtWarningMsg)
 
 const qint64 PeekSize = 1024 * 1024;
 
-const QByteArray XRequestId(){
+const QByteArray XRequestId()
+{
     return QByteArrayLiteral("X-Request-ID");
 }
 
@@ -43,9 +44,9 @@ void logHttp(const QByteArray &verb, const QString &url, const QByteArray &id, c
     stream << " " << url << " Header: { ";
     for (const auto &it : header) {
         stream << it.first << ": ";
-        if (it.first == "Authorization") {
-            stream << (it.second.startsWith("Bearer ") ? "Bearer" : "Basic");
-            stream << " [redacted]";
+        const auto name = it.first.toLower();
+        if (name == "authorization" || name == "proxy-authorization" || name == "cookie" || name == "set-cookie") {
+            stream << "[redacted]";
         } else {
             stream << it.second;
         }
@@ -80,6 +81,10 @@ namespace OCC {
 void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operation operation, QIODevice *device)
 {
     const auto request = reply->request();
+    // App-password responses contain credentials, including in malformed bodies.
+    if (request.url().path().endsWith(QStringLiteral("/core/getapppassword")) || request.url().path().contains(QStringLiteral("/core/wipe/"))) {
+        return;
+    }
     if (!lcNetworkHttp().isInfoEnabled()) {
         return;
     }
@@ -98,11 +103,11 @@ void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operati
 
     QObject::connect(reply, &QNetworkReply::finished, reply, [reply] {
         logHttp(requestVerb(*reply),
-            reply->url().toString(),
-            reply->request().rawHeader(XRequestId()),
-            reply->header(QNetworkRequest::ContentTypeHeader).toString(),
-            reply->rawHeaderPairs(),
-            reply);
+                reply->url().toString(),
+                reply->request().rawHeader(XRequestId()),
+                reply->header(QNetworkRequest::ContentTypeHeader).toString(),
+                reply->rawHeaderPairs(),
+                reply);
     });
 }
 

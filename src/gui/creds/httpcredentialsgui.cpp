@@ -13,6 +13,8 @@
 #include "creds/httpcredentialsgui.h"
 #include "theme.h"
 #include "account.h"
+#include "privateclouddrive.h"
+#include "creds/privatecloudcredentialsdialog.h"
 #include "networkjobs.h"
 #include <QMessageBox>
 #include "common/asserts.h"
@@ -25,6 +27,33 @@ Q_LOGGING_CATEGORY(lcHttpCredentialsGui, "nextcloud.sync.credentials.http.gui", 
 
 void HttpCredentialsGui::askFromUser()
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        if (_privateCloudDialog) {
+            _privateCloudDialog->show();
+            _privateCloudDialog->raise();
+            _privateCloudDialog->activateWindow();
+            return;
+        }
+        auto *dialog = new PrivateCloudCredentialsDialog(_account);
+        _privateCloudDialog = dialog;
+        connect(this, &QObject::destroyed, dialog, &QObject::deleteLater);
+        connect(dialog, &PrivateCloudCredentialsDialog::credentialsReady, this, [this](const QString &user, const QString &password) {
+            _privateCloudDialog.clear();
+            _user = user;
+            _password = password;
+            _previousPassword.clear();
+            _ready = true;
+            persist();
+            Q_EMIT asked();
+        });
+        connect(dialog, &QDialog::rejected, this, [this] {
+            _privateCloudDialog.clear();
+            Q_EMIT asked();
+        });
+        dialog->show();
+        return;
+    }
+
     // This function can be called from AccountState::slotInvalidCredentials,
     // which (indirectly, through HttpCredentials::invalidateToken) schedules
     // a cache wipe of the qnam. We can only execute a network job again once

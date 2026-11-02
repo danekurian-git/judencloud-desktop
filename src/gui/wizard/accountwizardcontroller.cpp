@@ -13,6 +13,7 @@
 #include "configfile.h"
 #include "creds/credentialsfactory.h"
 #include "creds/httpcredentialsgui.h"
+#include "creds/privatecloudauthentication.h"
 #include "creds/webflowcredentials.h"
 #include "filesystem.h"
 #include "folder.h"
@@ -21,6 +22,7 @@
 #include "localnetworkpermission.h"
 #include "networkjobs.h"
 #include "owncloudpropagator_p.h"
+#include "privateclouddrive.h"
 #include "selectivesyncdialog.h"
 #include "theme.h"
 
@@ -43,43 +45,40 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
 #include <QNetworkProxy>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPointer>
-#include <QSslConfiguration>
 #include <QSslCertificate>
+#include <QSslConfiguration>
 #include <QStorageInfo>
 #include <QTimer>
 #include <QUuid>
 
 using namespace Qt::StringLiterals;
 
-namespace OCC {
+namespace OCC
+{
 
 Q_LOGGING_CATEGORY(lcAccountWizardController, "nextcloud.gui.accountwizardcontroller", QtInfoMsg)
 
-namespace {
+namespace
+{
 
 bool localFolderContainsData(const QString &localSyncFolder)
 {
     const auto localFolder = QDir(localSyncFolder);
-    return localFolder.exists()
-        && !localFolder.entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty();
+    return localFolder.exists() && !localFolder.entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty();
 }
 
 [[nodiscard]] QUrl normalizedServerUrlForComparison(const QUrl &serverUrl)
 {
-    auto normalizedUrl = serverUrl.adjusted(QUrl::NormalizePathSegments
-                                            | QUrl::StripTrailingSlash
-                                            | QUrl::RemoveUserInfo
-                                            | QUrl::RemoveQuery
-                                            | QUrl::RemoveFragment);
+    auto normalizedUrl =
+        serverUrl.adjusted(QUrl::NormalizePathSegments | QUrl::StripTrailingSlash | QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment);
     normalizedUrl.setScheme(normalizedUrl.scheme().toCaseFolded());
     normalizedUrl.setHost(normalizedUrl.host().toCaseFolded());
 
-    if ((normalizedUrl.scheme() == "http"_L1 && normalizedUrl.port() == 80)
-        || (normalizedUrl.scheme() == "https"_L1 && normalizedUrl.port() == 443)) {
+    if ((normalizedUrl.scheme() == "http"_L1 && normalizedUrl.port() == 80) || (normalizedUrl.scheme() == "https"_L1 && normalizedUrl.port() == 443)) {
         normalizedUrl.setPort(-1);
     }
     if (normalizedUrl.path() == "/"_L1) {
@@ -94,6 +93,17 @@ bool localFolderContainsData(const QString &localSyncFolder)
 AccountWizardController::AccountWizardController(QObject *parent)
     : QObject(parent)
     , _localNetworkPermissionCheck(LocalNetworkPermission::checkDeniedForConnection)
+    , _privateCloudMode(PrivateCloudDrive::isEnabled())
+    , _privateCloudAvailabilityCheck([](const QString &path) {
+        if (bestAvailableVfsMode() != Vfs::WindowsCfApi) {
+            return tr("Windows on-demand files are unavailable. Please repair the installation and try again.");
+        }
+        const auto storageError = Utility::syncRootStorageError(path);
+        return storageError.isEmpty() ? PrivateCloudDrive::checkAvailability(path) : storageError;
+    })
+    , _localSyncFolderDialog([](const QString &startFolder) {
+        return QFileDialog::getExistingDirectory(nullptr, tr("Local Sync Folder"), startFolder, QFileDialog::ShowDirsOnly);
+    })
 {
     initialiseAccount();
 
@@ -103,12 +113,41 @@ AccountWizardController::AccountWizardController(QObject *parent)
     _largeFolderThresholdMb = static_cast<int>(largeFolderLimit.second);
     _askBeforeExternalStorage = cfg.confirmExternalStorage();
 
-    if (canUseVirtualFiles()) {
+    if (privateCloudMode() || canUseVirtualFiles()) {
         _syncMode = VirtualFiles;
+    }
+    if (privateCloudMode()) {
+        const auto folders = FolderMan::instance()->map();
+        for (const auto folder : folders) {
+            if (resumePrivateCloudSetup(folder)) {
+                break;
+            }
+        }
+        if (!_privateCloudFolder) {
+            ensureAccount();
+            _account->setUrl(Account::enforcedServerUrl());
+            setCurrentStep(BasicAuthStep);
+        }
     }
 }
 
 AccountWizardController::~AccountWizardController() = default;
+
+bool AccountWizardController::resumePrivateCloudSetup(Folder *folder)
+{
+    const auto account = folder->accountState()->account();
+    const QString identity = account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + account->davUser();
+    QString backingError;
+    const auto backingPath = PrivateCloudDrive::backingPath(identity, &backingError);
+    if (!privateCloudMode() || !folder->privateCloudSetupPending() || !Account::isServerUrlAllowed(account->url()) || folder->vfs().mode() != Vfs::WindowsCfApi
+        || !backingError.isEmpty() || backingPath.isEmpty() || folder->remotePath() != QStringLiteral("/") || QDir(folder->path()) != QDir(backingPath)) {
+        return false;
+    }
+    _account = account;
+    _privateCloudFolder = folder;
+    QTimer::singleShot(0, this, &AccountWizardController::completeAuthentication);
+    return true;
+}
 
 void AccountWizardController::initialiseAccount()
 {
@@ -116,15 +155,17 @@ void AccountWizardController::initialiseAccount()
     if (!cfg.overrideServerUrl().isEmpty()) {
         Theme::instance()->setOverrideServerUrl(cfg.overrideServerUrl());
         Theme::instance()->setForceOverrideServerUrl(true);
-        Theme::instance()->setVfsEnabled(cfg.isVfsEnabled());
+        if (Account::enforcedServerUrl().isEmpty()) {
+            Theme::instance()->setVfsEnabled(cfg.isVfsEnabled());
+        }
         Theme::instance()->setStartLoginFlowAutomatically(true);
     }
 
     initialiseOverrideServerChoices();
 
-    const auto defaultUrl =
-        overrideServerSelectionRequired() ? _overrideServerUrls.value(_overrideServerIndex) :
-        Theme::instance()->multipleOverrideServers() ? QString{} : Theme::instance()->overrideServerUrl();
+    const auto defaultUrl = overrideServerSelectionRequired() ? _overrideServerUrls.value(_overrideServerIndex)
+        : Theme::instance()->multipleOverrideServers()        ? QString{}
+                                                              : Theme::instance()->overrideServerUrl();
 
     _remoteFolder = Theme::instance()->defaultServerFolder();
     setServerUrl(defaultUrl);
@@ -199,11 +240,11 @@ bool AccountWizardController::overrideServerSelectionRequired() const
 
 bool AccountWizardController::startLoginFlowAutomatically() const
 {
-    return Theme::instance()->startLoginFlowAutomatically()
-        && Theme::instance()->forceOverrideServerUrl()
-        && !_serverUrl.isEmpty()
-        && !Theme::instance()->multipleOverrideServers()
-        && !overrideServerSelectionRequired();
+    if (privateCloudMode()) {
+        return false;
+    }
+    return Theme::instance()->startLoginFlowAutomatically() && Theme::instance()->forceOverrideServerUrl() && !_serverUrl.isEmpty()
+        && !Theme::instance()->multipleOverrideServers() && !overrideServerSelectionRequired();
 }
 
 QStringList AccountWizardController::overrideServerNames() const
@@ -229,6 +270,10 @@ void AccountWizardController::setOverrideServerIndex(int index)
 
 bool AccountWizardController::setServerUrlForLoginFlow(const QUrl &serverUrl)
 {
+    if (!Account::isServerUrlAllowed(serverUrl)) {
+        setErrorText(tr("This client cannot connect to a different server."));
+        return false;
+    }
     if (!overrideServerSelectionRequired()) {
         setServerUrl(serverUrl.toString());
         return true;
@@ -246,6 +291,11 @@ bool AccountWizardController::setServerUrlForLoginFlow(const QUrl &serverUrl)
     }
 
     return false;
+}
+
+bool AccountWizardController::privateCloudMode() const
+{
+    return _privateCloudMode;
 }
 
 bool AccountWizardController::busy() const
@@ -290,9 +340,7 @@ QString AccountWizardController::avatarUrl() const
 
 QString AccountWizardController::syncEverythingDescription() const
 {
-    return _syncEverythingDescription.isEmpty()
-        ? tr("Will require local storage")
-        : _syncEverythingDescription;
+    return _syncEverythingDescription.isEmpty() ? tr("Will require local storage") : _syncEverythingDescription;
 }
 
 QString AccountWizardController::localSyncFolder() const
@@ -360,6 +408,9 @@ bool AccountWizardController::isUsingFileProvider() const
 
 bool AccountWizardController::canUseClassicSync() const
 {
+    if (privateCloudMode()) {
+        return false;
+    }
     return !Theme::instance()->enforceVirtualFilesSyncFolder() || !canUseVirtualFiles();
 }
 
@@ -370,12 +421,12 @@ bool AccountWizardController::needsSyncOptions() const
 
 bool AccountWizardController::canSkipFolderConfiguration() const
 {
-    return true;
+    return !privateCloudMode();
 }
 
 bool AccountWizardController::hasAdvancedOptions() const
 {
-    return showLargeFolderConfirmation() || showExternalStorageConfirmation();
+    return !privateCloudMode() && (showLargeFolderConfirmation() || showExternalStorageConfirmation());
 }
 
 bool AccountWizardController::showLargeFolderConfirmation() const
@@ -502,9 +553,7 @@ bool AccountWizardController::proxyAuthenticationRequired() const
 
 void AccountWizardController::setProxyAuthenticationRequired(bool proxyAuthenticationRequired)
 {
-    const auto proxyAuthentication = proxyAuthenticationRequired
-        ? ProxyAuthentication::AuthenticationRequired
-        : ProxyAuthentication::NoAuthentication;
+    const auto proxyAuthentication = proxyAuthenticationRequired ? ProxyAuthentication::AuthenticationRequired : ProxyAuthentication::NoAuthentication;
     if (_proxySettings._needsAuth == proxyAuthentication) {
         return;
     }
@@ -592,7 +641,7 @@ void AccountWizardController::setBasicAuthPassword(const QString &password)
 
 bool AccountWizardController::basicAuthValid() const
 {
-    return !_basicAuthUser.isEmpty();
+    return !_basicAuthUser.trimmed().isEmpty() && (!privateCloudMode() || !_basicAuthPassword.isEmpty());
 }
 
 bool AccountWizardController::publicShareSetup() const
@@ -602,7 +651,7 @@ bool AccountWizardController::publicShareSetup() const
 
 QString AccountWizardController::appName() const
 {
-    return Theme::instance()->appNameGUI();
+    return privateCloudMode() ? QStringLiteral("privateCloud") : Theme::instance()->appNameGUI();
 }
 
 QString AccountWizardController::serverUrlPlaceholder() const
@@ -694,7 +743,38 @@ void AccountWizardController::submitServerUrl()
 
 void AccountWizardController::submitBasicAuth()
 {
-    if (_busy || !_account) {
+    if (_cancelled || _busy || !_account) {
+        return;
+    }
+
+    if (privateCloudMode()) {
+        if (!basicAuthValid()) {
+            setErrorText(tr("Enter both your username and password."));
+            return;
+        }
+        setBusy(true);
+        setErrorText({});
+        setAuthStatusText(tr("Signing in…"));
+        _privateCloudAuthentication = std::make_unique<PrivateCloudAuthentication>(_account, this);
+        connect(_privateCloudAuthentication.get(), &PrivateCloudAuthentication::failed, this, [this](const QString &message) {
+            if (_cancelled) {
+                return;
+            }
+            setBusy(false);
+            setAuthStatusText({});
+            setBasicAuthPassword({});
+            setErrorText(message);
+        });
+        connect(_privateCloudAuthentication.get(), &PrivateCloudAuthentication::succeeded, this, [this] {
+            if (_cancelled) {
+                return;
+            }
+            setBasicAuthPassword({});
+            setUserDisplayName(_account->prettyName());
+            setServerDisplayName(_account->url().host());
+            completeAuthentication();
+        });
+        _privateCloudAuthentication->start(_basicAuthUser, _basicAuthPassword);
         return;
     }
 
@@ -745,7 +825,11 @@ void AccountWizardController::submitBasicAuth()
 
 void AccountWizardController::startServerCheck(const QUrl &serverUrl)
 {
-    _account->setUrl(serverUrl);
+    if (!_account->setUrl(serverUrl)) {
+        setBusy(false);
+        setErrorText(tr("This client cannot connect to a different server."));
+        return;
+    }
     _account->setCredentials(CredentialsFactory::create("dummy"));
     const auto proxyType = proxySettingsAvailable() ? _proxySettings._proxyType : QNetworkProxy::NoProxy;
     _account->setProxyType(proxyType);
@@ -816,17 +900,29 @@ void AccountWizardController::slotFindServerBehindRedirect()
     redirectCheckJob->setTimeout(qMin(2000ll, redirectCheckJob->timeoutMsec()));
 
     auto permanentRedirects = std::make_shared<int>(0);
-    connect(redirectCheckJob, &AbstractNetworkJob::redirected, this,
-        [permanentRedirects, account = _account](QNetworkReply *reply, const QUrl &targetUrl, int count) {
-            const auto httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            if (count == *permanentRedirects && (httpCode == 301 || httpCode == 308)) {
-                qCInfo(lcAccountWizardController) << account->url() << "was redirected to" << targetUrl;
-                account->setUrl(targetUrl);
-                *permanentRedirects += 1;
-            }
-        });
+    auto rejectedRedirect = std::make_shared<bool>(false);
+    connect(redirectCheckJob,
+            &AbstractNetworkJob::redirected,
+            this,
+            [this, permanentRedirects, rejectedRedirect, redirectCheckJob, account = _account](QNetworkReply *reply, const QUrl &targetUrl, int count) {
+                const auto httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                if (count == *permanentRedirects && (httpCode == 301 || httpCode == 308)) {
+                    qCInfo(lcAccountWizardController) << account->url() << "was redirected to" << targetUrl;
+                    if (!account->setUrl(targetUrl)) {
+                        *rejectedRedirect = true;
+                        setBusy(false);
+                        setErrorText(tr("The server redirected this account to a server that is not allowed."));
+                        redirectCheckJob->setFollowRedirects(false);
+                        return;
+                    }
+                    *permanentRedirects += 1;
+                }
+            });
 
-    connect(redirectCheckJob, &SimpleNetworkJob::finishedSignal, this, [this] {
+    connect(redirectCheckJob, &SimpleNetworkJob::finishedSignal, this, [this, rejectedRedirect] {
+        if (*rejectedRedirect) {
+            return;
+        }
         auto *job = new CheckServerJob(_account, this);
         job->setIgnoreCredentialFailure(true);
         connect(job, &CheckServerJob::instanceFound, this, &AccountWizardController::slotFoundServer);
@@ -843,7 +939,11 @@ void AccountWizardController::slotFoundServer(const QUrl &url, const QJsonObject
     _account->setServerVersion(serverVersion);
 
     if (url != _account->url()) {
-        _account->setUrl(url);
+        if (!_account->setUrl(url)) {
+            setBusy(false);
+            setErrorText(tr("The server redirected this account to a server that is not allowed."));
+            return;
+        }
         setServerUrl(url.toString());
     }
 
@@ -871,10 +971,8 @@ void AccountWizardController::slotNoServerFound(QNetworkReply *reply)
     if (!_account->url().isValid()) {
         message = tr("Invalid URL");
     } else {
-        message = tr("Failed to connect to %1 at %2:\n%3")
-            .arg(Theme::instance()->appNameGUI(),
-                 _account->url().toString(),
-                 job ? job->errorString() : QString{});
+        message =
+            tr("Failed to connect to %1 at %2:\n%3").arg(Theme::instance()->appNameGUI(), _account->url().toString(), job ? job->errorString() : QString{});
     }
 
     setBusy(false);
@@ -887,8 +985,7 @@ void AccountWizardController::slotNoServerFound(QNetworkReply *reply)
 void AccountWizardController::slotNoServerFoundTimeout(const QUrl &url)
 {
     setBusy(false);
-    setErrorText(tr("Timeout while trying to connect to %1 at %2.")
-        .arg(Utility::escape(Theme::instance()->appNameGUI()), Utility::escape(url.toString())));
+    setErrorText(tr("Timeout while trying to connect to %1 at %2.").arg(Utility::escape(Theme::instance()->appNameGUI()), Utility::escape(url.toString())));
     handleFailedServerConnection(url, false);
 }
 
@@ -914,6 +1011,11 @@ void AccountWizardController::slotDetermineAuthType()
 
 void AccountWizardController::startFlow2Auth()
 {
+    if (privateCloudMode()) {
+        setBusy(false);
+        setCurrentStep(BasicAuthStep);
+        return;
+    }
     _account->setCredentials(CredentialsFactory::create("http"));
 
     discardFlow2Auth();
@@ -972,6 +1074,9 @@ void AccountWizardController::pollNow()
 
 void AccountWizardController::slotFlow2AuthResult(Flow2Auth::Result result, const QString &errorString, const QString &user, const QString &appPassword)
 {
+    if (_cancelled || privateCloudMode()) {
+        return;
+    }
     switch (result) {
     case Flow2Auth::NotSupported:
         setErrorText(tr("Unable to open the Browser, please copy the link to your Browser."));
@@ -1081,13 +1186,17 @@ void AccountWizardController::slotAuthError(QNetworkReply *reply)
         if (path.endsWith(expectedPath)) {
             path.chop(expectedPath.size());
             adjustedRedirectUrl.setPath(path);
-            _account->setUrl(adjustedRedirectUrl);
+            if (!_account->setUrl(adjustedRedirectUrl)) {
+                setBusy(false);
+                setErrorText(tr("The server redirected this account to a server that is not allowed."));
+                return;
+            }
             testOwnCloudConnect();
             return;
         }
 
         errorMessage = tr("The authenticated request to the server was redirected to \"%1\". The URL is bad, the server is misconfigured.")
-            .arg(Utility::escape(redirectUrl.toString()));
+                           .arg(Utility::escape(redirectUrl.toString()));
     } else if (reply->error() == QNetworkReply::ContentNotFoundError) {
         completeAuthentication();
         return;
@@ -1111,8 +1220,24 @@ void AccountWizardController::slotAuthError(QNetworkReply *reply)
 
 void AccountWizardController::completeAuthentication()
 {
+    if (_cancelled) {
+        return;
+    }
     setBusy(false);
     setAuthStatusText(tr("Account connected."));
+    if (privateCloudMode()) {
+        _remoteFolder = QStringLiteral("/");
+        _syncMode = VirtualFiles;
+        _selectiveSyncBlacklist.clear();
+        Q_EMIT syncModeChanged();
+        initialiseLocalSyncFolder();
+        setNeedsSyncOptions(!_privateCloudFolder);
+        setCurrentStep(_privateCloudFolder ? DriveSetupStep : SyncOptionsStep);
+        if (_privateCloudFolder) {
+            QTimer::singleShot(0, this, &AccountWizardController::finish);
+        }
+        return;
+    }
     initialiseLocalSyncFolder();
     fetchRootFolderSize();
 
@@ -1201,11 +1326,23 @@ void AccountWizardController::fetchRootFolderSize()
 
 void AccountWizardController::cancel()
 {
+    if (_cancelled) {
+        return;
+    }
+    _cancelled = true;
+    discardFlow2Auth();
+    if (_privateCloudAuthentication) {
+        _privateCloudAuthentication->cancel();
+    }
+    setBasicAuthPassword({});
     Q_EMIT finished(QDialog::Rejected);
 }
 
 void AccountWizardController::goBack()
 {
+    if (privateCloudMode()) {
+        return;
+    }
     setErrorText({});
     if (_currentStep == BrowserAuthStep || _currentStep == BasicAuthStep || _currentStep == SyncOptionsStep) {
         discardFlow2Auth();
@@ -1218,7 +1355,7 @@ void AccountWizardController::goBack()
 
 void AccountWizardController::finish()
 {
-    if (_busy) {
+    if (_busy || _cancelled) {
         return;
     }
 
@@ -1227,11 +1364,50 @@ void AccountWizardController::finish()
         return;
     }
 
-    if (localSyncFolderRequired()) {
-        validateLocalSyncFolder();
-        if (!_localSyncFolderValid || !ensureLocalSyncFolder()) {
+    if (privateCloudMode()) {
+        if (_currentStep != DriveSetupStep && _currentStep != SyncOptionsStep) {
             return;
         }
+        setErrorText({});
+        if (_privateCloudFolder) {
+            const QString identity = _account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + _account->davUser();
+            QString backingError;
+            const auto backingPath = PrivateCloudDrive::backingPath(identity, &backingError);
+            if (!backingError.isEmpty()) {
+                setErrorText(backingError);
+                return;
+            }
+            if (backingPath.isEmpty() || QDir(_localSyncFolder) != QDir(backingPath)) {
+                setErrorText(tr("The configured sync folder does not match this privateCloud account."));
+                return;
+            }
+        }
+        const auto availabilityError = _privateCloudAvailabilityCheck(_localSyncFolder);
+        if (!availabilityError.isEmpty()) {
+            setErrorText(availabilityError);
+            return;
+        }
+        if (_privateCloudFolder) {
+            completeRemoteFolderCheck();
+            return;
+        }
+    }
+
+    if (localSyncFolderRequired()) {
+        validateLocalSyncFolder();
+        if (!_localSyncFolderValid) {
+            if (privateCloudMode()) {
+                setErrorText(_localSyncFolderError);
+            }
+            return;
+        }
+        if (!ensureLocalSyncFolder()) {
+            return;
+        }
+    }
+
+    if (privateCloudMode()) {
+        setCurrentStep(DriveSetupStep);
     }
 
     if (_syncMode == SyncEverything) {
@@ -1250,6 +1426,9 @@ void AccountWizardController::finish()
 
 void AccountWizardController::skipFolderConfiguration()
 {
+    if (_cancelled || !canSkipFolderConfiguration()) {
+        return;
+    }
     if (!_account) {
         Q_EMIT finished(QDialog::Rejected);
         return;
@@ -1269,7 +1448,9 @@ AccountState *AccountWizardController::applyAccountChanges()
     // With the app-level File Provider mode enabled, the new account's file provider
     // domain is created by the FileProviderSettingsController's accountAdded hook.
     const auto accountState = manager->addAccount(_account);
-
+    if (privateCloudMode()) {
+        _account->credentials()->persist();
+    }
     manager->saveAccount(_account);
     return accountState;
 }
@@ -1283,6 +1464,11 @@ void AccountWizardController::clearOneShotOverrides()
 
 void AccountWizardController::initialiseLocalSyncFolder()
 {
+    if (privateCloudMode()) {
+        _localSyncFolderOverride = false;
+        setLocalSyncFolder(_privateCloudFolder ? _privateCloudFolder->path() : PrivateCloudDrive::defaultSetupPath());
+        return;
+    }
     ConfigFile cfg;
     const auto overrideLocalDir = !cfg.overrideLocalDir().isEmpty();
     _localSyncFolderOverride = overrideLocalDir;
@@ -1298,13 +1484,9 @@ void AccountWizardController::initialiseLocalSyncFolder()
 #endif
     }
 
-    const auto strategy = overrideLocalDir
-        ? FolderMan::GoodPathStrategy::AllowOverrideExistingPath
-        : FolderMan::GoodPathStrategy::AllowOnlyNewPath;
-    setLocalSyncFolder(localFolder.isEmpty()
-        ? QString{}
-        : FolderMan::instance()->findGoodPathForNewSyncFolder(localFolder, localFolderServerUrl(), strategy),
-        overrideLocalDir);
+    const auto strategy = overrideLocalDir ? FolderMan::GoodPathStrategy::AllowOverrideExistingPath : FolderMan::GoodPathStrategy::AllowOnlyNewPath;
+    setLocalSyncFolder(localFolder.isEmpty() ? QString{} : FolderMan::instance()->findGoodPathForNewSyncFolder(localFolder, localFolderServerUrl(), strategy),
+                       overrideLocalDir);
 }
 
 void AccountWizardController::setLocalSyncFolder(const QString &localSyncFolder, bool selectedByUser)
@@ -1325,10 +1507,7 @@ void AccountWizardController::setLocalSyncFolder(const QString &localSyncFolder,
 void AccountWizardController::promptForInitialLocalSyncFolderIfNeeded()
 {
 #ifdef Q_OS_MACOS
-    if (_initialLocalSyncFolderPromptShown
-        || _localSyncFolderSelected
-        || _currentStep != SyncOptionsStep
-        || !localSyncFolderRequired()) {
+    if (_initialLocalSyncFolderPromptShown || _localSyncFolderSelected || _currentStep != SyncOptionsStep || !localSyncFolderRequired()) {
         return;
     }
 
@@ -1360,8 +1539,8 @@ void AccountWizardController::validateLocalSyncFolder()
     if (folderRequired) {
         const auto freeBytes = availableLocalSpace();
         if (freeBytes >= 0) {
-            localSyncFolderFreeSpace = tr("%1 free space", "%1 gets replaced with the size and a matching unit. Example: 3 MB or 5 GB")
-                .arg(Utility::octetsToString(freeBytes));
+            localSyncFolderFreeSpace =
+                tr("%1 free space", "%1 gets replaced with the size and a matching unit. Example: 3 MB or 5 GB").arg(Utility::octetsToString(freeBytes));
         }
     }
 
@@ -1390,13 +1569,12 @@ void AccountWizardController::validateLocalSyncFolder()
         localSyncFolderError = tr("Please choose a local sync folder.");
     }
 #endif
-    if (folderRequired && _localSyncFolderSelected && !_localSyncFolderOverride && localSyncFolderError.isEmpty()) {
+    if (folderRequired && (_localSyncFolderSelected || privateCloudMode()) && !_localSyncFolderOverride && localSyncFolderError.isEmpty()) {
         if (localFolderContainsData(_localSyncFolder)) {
             localSyncFolderError = tr("Please choose an empty local sync folder.");
         }
     }
-    const auto localSyncFolderValid = !folderRequired
-        || (!_localSyncFolderPickerOpen && localSyncFolderError.isEmpty());
+    const auto localSyncFolderValid = !folderRequired || (!_localSyncFolderPickerOpen && localSyncFolderError.isEmpty());
 
     if (_localSyncFolderFreeSpace != localSyncFolderFreeSpace) {
         _localSyncFolderFreeSpace = localSyncFolderFreeSpace;
@@ -1429,9 +1607,7 @@ qint64 AccountWizardController::availableLocalSpace() const
 #else
         QDir::homePath();
 #endif
-    const auto path = !QDir(localFolder).exists() && localFolder.contains(homePath)
-        ? homePath
-        : localFolder;
+    const auto path = !QDir(localFolder).exists() && localFolder.contains(homePath) ? homePath : localFolder;
     const QStorageInfo storage(QDir::toNativeSeparators(path));
     return storage.isValid() ? storage.bytesAvailable() : -1;
 }
@@ -1463,7 +1639,9 @@ bool AccountWizardController::ensureLocalSyncFolder()
     }
 
     FileSystem::setFolderMinimumPermissions(localFolder);
-    Utility::setupFavLink(localFolder);
+    if (!privateCloudMode()) {
+        Utility::setupFavLink(localFolder);
+    }
     return true;
 }
 
@@ -1506,6 +1684,9 @@ QString AccountWizardController::sanitizedRemoteFolderEntityPath() const
 
 void AccountWizardController::slotRemoteFolderExists(QNetworkReply *reply)
 {
+    if (_cancelled) {
+        return;
+    }
     const auto job = qobject_cast<EntityExistsJob *>(sender());
     const auto error = reply ? reply->error() : QNetworkReply::UnknownNetworkError;
 
@@ -1555,17 +1736,55 @@ void AccountWizardController::slotCreateRemoteFolderFinished(QNetworkReply *repl
         setErrorText(tr("The remote folder creation failed because the provided credentials are wrong. Please go back and check your credentials."));
     } else {
         setErrorText(tr("Remote folder %1 creation failed with error <tt>%2</tt>.")
-            .arg(Utility::escape(_remoteFolder), QString::number(static_cast<int>(networkError))));
+                         .arg(Utility::escape(_remoteFolder), QString::number(static_cast<int>(networkError))));
     }
 }
 
 void AccountWizardController::completeRemoteFolderCheck()
 {
-    const auto accountState = applyAccountChanges();
-    if (localSyncFolderRequired() && !createSyncFolder(accountState)) {
-        AccountManager::instance()->removeAccountState(accountState);
-        setBusy(false);
+    if (_cancelled) {
         return;
+    }
+    if (!_privateCloudFolder) {
+        if (privateCloudMode()) {
+            // A remote check may take time. Recheck admission before creating the journal or provider.
+            validateLocalSyncFolder();
+            const QString identity = _account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + _account->davUser();
+            const auto backingError = _localSyncFolderValid ? PrivateCloudDrive::configureBackingPath(identity, _localSyncFolder) : _localSyncFolderError;
+            if (!backingError.isEmpty()) {
+                setErrorText(backingError);
+                setBusy(false);
+                setCurrentStep(SyncOptionsStep);
+                return;
+            }
+        }
+        const auto accountState = applyAccountChanges();
+        if (localSyncFolderRequired() && !createSyncFolder(accountState)) {
+            AccountManager::instance()->removeAccountState(accountState);
+            setBusy(false);
+            return;
+        }
+    }
+
+    if (privateCloudMode()) {
+        if (!_privateCloudFolder->ensureVfsReady()) {
+            setErrorText(tr("Windows on-demand files could not start. Please try again."));
+            setBusy(false);
+            return;
+        }
+        if (!_privateCloudFolder->vfs().setPinState(QString(), PinState::OnlineOnly)) {
+            setErrorText(tr("Could not enable on-demand files. Please try again."));
+            setBusy(false);
+            return;
+        }
+        const auto mountError = PrivateCloudDrive::mount(_localSyncFolder);
+        if (!mountError.isEmpty()) {
+            setErrorText(mountError);
+            setBusy(false);
+            return;
+        }
+        _privateCloudFolder->setPrivateCloudSetupPending(false);
+        _privateCloudFolder->setSyncPaused(false);
     }
 
     _account = AccountManager::createAccount();
@@ -1586,10 +1805,12 @@ bool AccountWizardController::createSyncFolder(AccountState *accountState)
     folderDefinition.localPath = FolderDefinition::prepareLocalPath(_localSyncFolder);
     folderDefinition.targetPath = FolderDefinition::prepareTargetPath(_remoteFolder);
     folderDefinition.ignoreHiddenFiles = FolderMan::instance()->ignoreHiddenFiles();
+    folderDefinition.paused = privateCloudMode();
+    folderDefinition.privateCloudSetupPending = privateCloudMode();
 
 #ifndef BUILD_FILE_PROVIDER_MODULE
     if (_syncMode == VirtualFiles) {
-        folderDefinition.virtualFilesMode = bestAvailableVfsMode();
+        folderDefinition.virtualFilesMode = privateCloudMode() ? Vfs::WindowsCfApi : bestAvailableVfsMode();
     }
 #endif
 
@@ -1609,15 +1830,17 @@ bool AccountWizardController::createSyncFolder(AccountState *accountState)
         return false;
     }
 
-    if (folderDefinition.virtualFilesMode != Vfs::Off && _syncMode == VirtualFiles) {
+    if (privateCloudMode()) {
+        _privateCloudFolder = folder;
+    }
+
+    if (!privateCloudMode() && folderDefinition.virtualFilesMode != Vfs::Off && _syncMode == VirtualFiles) {
         folder->setRootPinState(PinState::OnlineOnly);
     }
 
     folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, _selectiveSyncBlacklist);
     const auto preWhitelistRoot = _syncMode != SyncEverything || (!_askBeforeLargeFolders && !_askBeforeExternalStorage);
-    folder->journalDb()->setSelectiveSyncList(
-        SyncJournalDb::SelectiveSyncWhiteList,
-        preWhitelistRoot ? QStringList() << QLatin1String("/") : QStringList());
+    folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncWhiteList, preWhitelistRoot ? QStringList() << QLatin1String("/") : QStringList());
     folderMan->scheduleAllFolders();
     return true;
 }
@@ -1668,11 +1891,15 @@ void AccountWizardController::setSyncMode(int syncMode)
 
 void AccountWizardController::chooseLocalSyncFolder()
 {
+    if (_busy || _cancelled || (privateCloudMode() && (_currentStep != SyncOptionsStep || _privateCloudFolder))) {
+        return;
+    }
     const auto selectedFolder = openLocalSyncFolderDialog(false);
-    if (selectedFolder.isEmpty()) {
+    if (_cancelled || selectedFolder.isEmpty()) {
         return;
     }
 
+    setErrorText({});
     _localSyncFolderOverride = false;
     setLocalSyncFolder(selectedFolder, true);
 }
@@ -1694,10 +1921,7 @@ QString AccountWizardController::openLocalSyncFolderDialog(bool initialSelection
 #endif
     }
 
-    return QFileDialog::getExistingDirectory(nullptr,
-        tr("Local Sync Folder"),
-        startFolder,
-        QFileDialog::ShowDirsOnly);
+    return _localSyncFolderDialog(startFolder);
 }
 
 void AccountWizardController::openSelectiveSync()
@@ -1711,11 +1935,7 @@ void AccountWizardController::openSelectiveSync()
     const auto previousSelectiveSyncSize = _selectiveSyncSize;
     setSyncMode(SelectiveSync);
     if (!_selectiveSyncDialog) {
-        _selectiveSyncDialog = new SelectiveSyncDialog(_account,
-            _remoteFolder,
-            _selectiveSyncBlacklist,
-            nullptr,
-            Qt::Dialog | Qt::FramelessWindowHint);
+        _selectiveSyncDialog = new SelectiveSyncDialog(_account, _remoteFolder, _selectiveSyncBlacklist, nullptr, Qt::Dialog | Qt::FramelessWindowHint);
         _selectiveSyncDialog->setAttribute(Qt::WA_DeleteOnClose);
         _selectiveSyncDialog->setWindowModality(Qt::ApplicationModal);
         connect(_selectiveSyncDialog, &SelectiveSyncDialog::finished, this, [this, previousSyncMode, previousBlacklist, previousSelectiveSyncSize] {
@@ -1956,10 +2176,7 @@ void AccountWizardController::useClientCertificateForSecureConnection()
 
 void AccountWizardController::chooseClientCertificate()
 {
-    const auto fileUrl = QFileDialog::getOpenFileUrl(nullptr,
-        tr("Select a certificate"),
-        QUrl(),
-        tr("Certificate files (*.p12 *.pfx)"));
+    const auto fileUrl = QFileDialog::getOpenFileUrl(nullptr, tr("Select a certificate"), QUrl(), tr("Certificate files (*.p12 *.pfx)"));
     if (fileUrl.isEmpty()) {
         return;
     }
@@ -1998,11 +2215,7 @@ bool AccountWizardController::submitClientCertificate()
     auto certDataCopy = certData;
     QBuffer certDataBuffer(&certDataCopy);
     certDataBuffer.open(QIODevice::ReadOnly);
-    if (!QSslCertificate::importPkcs12(&certDataBuffer,
-            &_clientSslKey,
-            &_clientSslCertificate,
-            &_clientSslCaCertificates,
-            certPassword)) {
+    if (!QSslCertificate::importPkcs12(&certDataBuffer, &_clientSslKey, &_clientSslCertificate, &_clientSslCaCertificates, certPassword)) {
         _clientCertificateError = tr("Could not load certificate. Maybe wrong password?");
         Q_EMIT clientCertificateChanged();
         return false;

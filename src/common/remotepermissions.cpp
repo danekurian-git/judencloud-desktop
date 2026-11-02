@@ -20,8 +20,12 @@ namespace OCC {
 
 Q_LOGGING_CATEGORY(lcRemotePermissions, "nextcloud.sync.remotepermissions", QtInfoMsg)
 
-static const char letters[] = " GWDNVCKRSMm";
+static const char letters[] = " GWDNVCKRSMme";
 
+bool RemotePermissions::isExternalStorageType(const QString &mountType)
+{
+    return mountType == QStringLiteral("external") || mountType == QStringLiteral("external-session");
+}
 
 template <typename Char>
 void RemotePermissions::fromArray(const Char *p)
@@ -112,6 +116,11 @@ RemotePermissions RemotePermissions::internalFromServerString(const QString &val
             const auto &shareAttributes = QJsonDocument::fromJson(otherProperties.value(QStringLiteral("share-attributes")).toString().toUtf8());
             shareAttributesDecoder(shareAttributes, perm);
         }
+    }
+
+    const auto mountType = QVariant(otherProperties.value(QStringLiteral("mount-type"))).toString();
+    if (isExternalStorageType(mountType)) {
+        perm.setPermission(IsExternalStorage);
     }
 
     if (algorithm == MountedPermissionAlgorithm::WildGuessMountedSubProperty) {

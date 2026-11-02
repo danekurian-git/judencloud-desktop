@@ -54,7 +54,7 @@ bool DiscoveryPhase::isInSelectiveSyncBlackList(const QString &path) const
 
 bool DiscoveryPhase::activeFolderSizeLimit() const
 {
-    return _syncOptions._newBigFolderSizeLimit > 0 && _syncOptions._vfs->mode() == Vfs::Off;
+    return false;
 }
 
 bool DiscoveryPhase::notifyExistingFolderOverLimit() const
@@ -221,9 +221,6 @@ void DiscoveryPhase::enqueueDirectoryToDelete(const QString &path, ProcessDirect
 
 bool DiscoveryPhase::recursiveCheckForDeletedParents(const QString &itemPath) const
 {
-    const auto &allKeys = _deletedItem.keys();
-    qCDebug(lcDiscovery()) << allKeys.join(", ");
-
     auto result = false;
     const auto &pathElements = itemPath.split('/');
     auto currentParentFolder = QString{};
@@ -233,7 +230,6 @@ bool DiscoveryPhase::recursiveCheckForDeletedParents(const QString &itemPath) co
         }
         currentParentFolder += onePathComponent;
 
-        qCDebug(lcDiscovery()) << "checks" << currentParentFolder << "for" << allKeys.join(", ");
         if (_deletedItem.find(currentParentFolder) == _deletedItem.end()) {
             continue;
         }
@@ -507,7 +503,7 @@ void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &fi
                                                             _account->serverHasMountRootProperty() ? RemotePermissions::MountedPermissionAlgorithm::UseMountRootProperty : RemotePermissions::MountedPermissionAlgorithm::WildGuessMountedSubProperty,
                                                             map);
             Q_EMIT firstDirectoryPermissions(perm);
-            _isExternalStorage = perm.hasPermission(RemotePermissions::IsMounted);
+            _isExternalStorage = perm.hasPermission(RemotePermissions::IsExternalStorage);
         }
         if (map.contains("data-fingerprint"_L1)) {
             _dataFingerprint = map.value("data-fingerprint"_L1).toUtf8();
@@ -591,7 +587,7 @@ void DiscoverySingleDirectoryJob::lsJobFinishedWithoutErrorSlot()
         Q_EMIT finished(HttpError{ 0, _error });
         deleteLater();
         return;
-    } else if (isE2eEncrypted() && _account->capabilities().clientSideEncryptionAvailable()) {
+    } else if (!_isExternalStorage && isE2eEncrypted() && _account->capabilities().clientSideEncryptionAvailable()) {
         Q_EMIT etag(_firstEtag, QDateTime::fromString(QString::fromUtf8(_lsColJob->responseTimestamp()), Qt::RFC2822Date));
         fetchE2eMetadata();
         return;

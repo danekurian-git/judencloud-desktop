@@ -18,12 +18,21 @@ endif()
 if (WIN32)
   list(APPEND OS_SPECIFIC_LINK_LIBRARIES
     Crypt32
+    Shell32
   )
 endif()
 
 set(libsync_SRCS
     account.h
     account.cpp
+    privatecloudtransport.h
+    privatecloudtransport.cpp
+    privatecloudblockedreply.h
+    privatecloudblockedreply.cpp
+    privateclouddrive.h
+    privateclouddrive.cpp
+    privatecloudmanagedstate.h
+    privatecloudmanagedstate.cpp
     pushnotifications.h
     pushnotifications.cpp
     wordlist.h

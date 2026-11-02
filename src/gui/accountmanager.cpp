@@ -134,6 +134,9 @@ AccountManager::AccountsRestoreResult AccountManager::restore(const bool alsoRes
         if (!skipSettingsKeys.contains(settings->group())) {
             const auto acc = loadAccountHelper(*settings);
             if (!acc) {
+                _additionalBlockedAccountIds.insert(accountId);
+                result = AccountsRestoreSuccessWithSkipped;
+                settings->endGroup();
                 continue;
             }
             acc->_id = accountId;
@@ -308,6 +311,7 @@ bool AccountManager::restoreFromLegacySettings()
             settings->beginGroup(accountId);
             const auto acc = loadAccountHelper(*settings);
             if (!acc) {
+                settings->endGroup();
                 continue;
             }
             addAccount(acc);
@@ -553,6 +557,11 @@ AccountPtr AccountManager::loadAccountHelper(QSettings &settings)
         return AccountPtr();
     }
 
+    if (!Account::isServerUrlAllowed(urlConfig.toUrl())) {
+        qCWarning(lcAccountManager) << "Skipping a saved account outside the configured server restriction.";
+        return {};
+    }
+
     const auto acc = createAccount();
 
     auto authType = settings.value(QLatin1String(authTypeC)).toString();
@@ -575,10 +584,14 @@ AccountPtr AccountManager::loadAccountHelper(QSettings &settings)
     if (!forceAuth.isEmpty() && !overrideUrl.isEmpty() && !multipleOverrideServers) {
         // If forceAuth is set, this might also mean the overrideURL has changed.
         // See enterprise issues #1126
-        acc->setUrl(overrideUrl);
+        if (!acc->setUrl(overrideUrl)) {
+            return {};
+        }
         authType = forceAuth;
     } else {
-        acc->setUrl(urlConfig.toUrl());
+        if (!acc->setUrl(urlConfig.toUrl())) {
+            return {};
+        }
     }
 
     // Migrate to webflow

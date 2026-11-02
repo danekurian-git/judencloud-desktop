@@ -87,9 +87,10 @@ void BulkPropagatorDownloadJob::start()
     const auto r = vfs->createPlaceholders(_filesToDownload);
 
     if (!r) {
-        qCCritical(lcBulkPropagatorDownloadJob) << "Could not create placholders:" << r.error();
+        qCCritical(lcBulkPropagatorDownloadJob) << "Could not create placeholders:" << r.error();
         for (const auto &fileToDownload : std::as_const(_filesToDownload)) {
             fileToDownload->_status = SyncFileItem::NormalError;
+            fileToDownload->_errorString = r.error();
             finalizeOneFile(fileToDownload);
         }
         abortWithError({}, SyncFileItem::NormalError, r.error());

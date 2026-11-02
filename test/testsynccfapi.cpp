@@ -10,10 +10,16 @@
 #include "syncenginetestutils.h"
 
 #include "common/vfs.h"
-#include "openfilemanager.h"
+#include "config.h"
+#include "owncloudpropagator.h"
+#include "privateclouddrive.h"
 #include "syncengine.h"
 #include "vfs/cfapi/cfapiwrapper.h"
 
+#include <QProcess>
+#include <QScopeGuard>
+#include <QSemaphore>
+#include <QtConcurrentRun>
 #include <QtTest>
 
 using namespace Qt::StringLiterals;
@@ -112,6 +118,46 @@ QSharedPointer<Vfs> setupVfs(FakeFolder &folder)
     return cfapiVfs;
 }
 
+bool enumerateCloudFolder(const QString &path)
+{
+    // A separate process triggers native population callbacks without leaving
+    // Explorer windows pointing into a temporary folder after test teardown.
+    const auto powershell = QStandardPaths::findExecutable(QStringLiteral("powershell.exe"));
+    if (powershell.isEmpty()) {
+        return false;
+    }
+    QProcess reader;
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("PRIVATECLOUD_ENUMERATION_TEST_PATH"), path);
+    reader.setProcessEnvironment(environment);
+    reader.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
+        arguments->flags |= CREATE_NO_WINDOW;
+    });
+    reader.start(powershell,
+                 {QStringLiteral("-NoProfile"),
+                  QStringLiteral("-NonInteractive"),
+                  QStringLiteral("-Command"),
+                  QStringLiteral("$ErrorActionPreference = 'Stop'; try { "
+                                 "$null = [System.IO.Directory]::GetFileSystemEntries($env:PRIVATECLOUD_ENUMERATION_TEST_PATH); "
+                                 "exit 0 } catch { Write-Error $_; exit 1 }")});
+    constexpr int startupTimeoutMs = 5000;
+    constexpr int enumerationTimeoutMs = 30000;
+    if (!reader.waitForStarted(startupTimeoutMs)) {
+        return false;
+    }
+    // Keep servicing the provider's Qt event loop while the reader waits for it.
+    if (!QTest::qWaitFor(
+            [&reader] {
+                return reader.state() == QProcess::NotRunning;
+            },
+            enumerationTimeoutMs)) {
+        reader.kill();
+        reader.waitForFinished(startupTimeoutMs);
+        return false;
+    }
+    return reader.exitStatus() == QProcess::NormalExit && reader.exitCode() == 0;
+}
+
 class TestSyncCfApi : public QObject
 {
     Q_OBJECT
@@ -123,6 +169,719 @@ private Q_SLOTS:
         Logger::instance()->setLogDebug(true);
 
         QStandardPaths::setTestModeEnabled(true);
+    }
+
+    void testTransferredPlaceholderIdentity_data()
+    {
+        QTest::addColumn<QByteArray>("fileId");
+        QTest::addColumn<bool>("directory");
+        QTest::newRow("file ascii") << QByteArrayLiteral("remote-file-id") << false;
+        QTest::newRow("file embedded null") << QByteArray::fromHex("6100620063") << false;
+        QTest::newRow("file non-ascii bytes") << QByteArray::fromHex("c3a9ff80") << false;
+        QTest::newRow("directory ascii") << QByteArrayLiteral("remote-folder-id") << true;
+        QTest::newRow("directory binary identity") << QByteArray::fromHex("c3a900ff80") << true;
+    }
+
+    void testTransferredPlaceholderIdentity()
+    {
+        QFETCH(QByteArray, fileId);
+        QFETCH(bool, directory);
+        PlaceholderCreateInfo entry;
+        entry.name = QStringLiteral("subfolder/rapport-\u00e9.txt");
+        entry.stdWStringName = entry.name.toStdWString();
+        entry.parsedProperties.fileId = fileId;
+        entry.parsedProperties.size = 12345;
+        entry.parsedProperties.modtime = 1700000000;
+        entry.parsedProperties.isDirectory = directory;
+
+        const auto placeholder = cfapi::createTransferPlaceholderInfo(entry);
+        QCOMPARE(placeholder.FileIdentityLength, DWORD(fileId.size()));
+        QCOMPARE(QByteArray(static_cast<const char *>(placeholder.FileIdentity), placeholder.FileIdentityLength), fileId);
+        QVERIFY(placeholder.FileIdentity == entry.parsedProperties.fileId.constData());
+        QVERIFY(placeholder.RelativeFileName == entry.stdWStringName.c_str());
+        QCOMPARE(QString::fromWCharArray(placeholder.RelativeFileName), entry.name);
+        QCOMPARE(placeholder.Flags, CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC);
+        QCOMPARE(placeholder.FsMetadata.FileSize.QuadPart, directory ? 0LL : 12345LL);
+        QCOMPARE(placeholder.FsMetadata.BasicInfo.FileAttributes, DWORD(directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL));
+        constexpr auto expectedFileTime = 133444736000000000LL;
+        QCOMPARE(placeholder.FsMetadata.BasicInfo.CreationTime.QuadPart, expectedFileTime);
+        QCOMPARE(placeholder.FsMetadata.BasicInfo.LastWriteTime.QuadPart, expectedFileTime);
+        QCOMPARE(placeholder.FsMetadata.BasicInfo.LastAccessTime.QuadPart, expectedFileTime);
+        QCOMPARE(placeholder.FsMetadata.BasicInfo.ChangeTime.QuadPart, expectedFileTime);
+    }
+
+    void testProviderDisplayNamePreservesCloudIdentities()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const auto path = QDir::toNativeSeparators(root.path());
+        const auto nativePath = path.toStdWString();
+        const auto providerName = QStringLiteral(APPLICATION_NAME);
+        const auto oldNativeName = providerName.toStdWString();
+        const auto uniqueAccount = QStringLiteral("branding-test-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+
+        // Reproduce the registration written by the previous client: the root
+        // has no opaque identity, and the display name is its persistent name.
+        CF_SYNC_REGISTRATION registration = {};
+        registration.StructSize = sizeof(registration);
+        registration.ProviderName = oldNativeName.c_str();
+        registration.ProviderVersion = L"1.0";
+        CF_SYNC_POLICIES policies = {};
+        policies.StructSize = sizeof(policies);
+        policies.Hydration.Primary = CF_HYDRATION_POLICY_FULL;
+        policies.Population.Primary = CF_POPULATION_POLICY_PARTIAL;
+        policies.InSync = CF_INSYNC_POLICY_PRESERVE_INSYNC_FOR_SYNC_ENGINE;
+        policies.HardLink = CF_HARDLINK_POLICY_NONE;
+        QCOMPARE(CfRegisterSyncRoot(nativePath.c_str(), &registration, &policies, CF_REGISTER_FLAG_NONE), S_OK);
+        const auto cleanup = qScopeGuard([&] {
+            const auto result = cfapi::unregisterSyncRoot(path, providerName, uniqueAccount);
+            if (!result) {
+                qWarning() << result.error();
+            }
+        });
+
+        // Connect before opening placeholder metadata handles, as the client does.
+        // Keep the legacy registration intact for the initial snapshot.
+        const CF_CALLBACK_REGISTRATION callbacks[] = {CF_CALLBACK_REGISTRATION_END};
+        CF_CONNECTION_KEY connection = {};
+        auto connected = false;
+        const auto connectProvider = [&] {
+            const auto result = CfConnectSyncRoot(nativePath.c_str(), callbacks, nullptr, CF_CONNECT_FLAG_BLOCK_SELF_IMPLICIT_HYDRATION, &connection);
+            connected = SUCCEEDED(result);
+            return result;
+        };
+        const auto disconnect = qScopeGuard([&] {
+            if (connected) {
+                const auto result = CfDisconnectSyncRoot(connection);
+                if (FAILED(result)) {
+                    qWarning() << "Could not disconnect the branding test provider:" << Utility::formatWinError(result);
+                }
+            }
+        });
+        QCOMPARE(connectProvider(), S_OK);
+
+        const QString filePath = path + QStringLiteral("\\branding.txt");
+        const auto fileIdentity = QByteArrayLiteral("branding-file-id");
+        const auto createResult = cfapi::createPlaceholderInfo(filePath, 1700000000, 64, fileIdentity);
+        QVERIFY2(createResult, qPrintable(createResult ? QString{} : createResult.error()));
+
+        CF_SYNC_ROOT_STANDARD_INFO rootBefore = {};
+        DWORD returnedSize = 0;
+        QCOMPARE(CfGetSyncRootInfoByPath(nativePath.c_str(), CF_SYNC_ROOT_INFO_STANDARD, &rootBefore, sizeof(rootBefore), &returnedSize), S_OK);
+        QCOMPARE(QString::fromWCharArray(rootBefore.ProviderName), providerName);
+        QCOMPARE(rootBefore.SyncRootIdentityLength, 0UL);
+        QVERIFY(rootBefore.SyncRootFileId.QuadPart != 0);
+
+        auto fileBeforeBuffer = std::vector<char>(sizeof(CF_PLACEHOLDER_STANDARD_INFO) + CF_PLACEHOLDER_MAX_FILE_IDENTITY_LENGTH);
+        {
+            const auto handle = cfapi::handleForPath(filePath);
+            QVERIFY(handle);
+            QCOMPARE(CfGetPlaceholderInfo(handle.get(),
+                                          CF_PLACEHOLDER_INFO_STANDARD,
+                                          fileBeforeBuffer.data(),
+                                          static_cast<DWORD>(fileBeforeBuffer.size()),
+                                          &returnedSize),
+                     S_OK);
+        }
+        const auto nativeFilePath = filePath.toStdWString();
+        const auto attributesBefore = GetFileAttributesW(nativeFilePath.c_str());
+        QVERIFY(attributesBefore != INVALID_FILE_ATTRIBUTES);
+        const auto fileBefore = reinterpret_cast<const CF_PLACEHOLDER_STANDARD_INFO *>(fileBeforeBuffer.data());
+        QCOMPARE(QByteArray(reinterpret_cast<const char *>(fileBefore->FileIdentity), fileBefore->FileIdentityLength), fileIdentity);
+
+        // The client updates registration before connecting on its next startup.
+        // A live connection retains the provider name from when it was opened.
+        QCOMPARE(CfDisconnectSyncRoot(connection), S_OK);
+        connected = false;
+        const auto update = cfapi::registerSyncRoot(path,
+                                                    providerName,
+                                                    QStringLiteral("1.0"),
+                                                    uniqueAccount,
+                                                    QUuid::createUuid().toString(),
+                                                    QStringLiteral(APPLICATION_DISPLAY_NAME),
+                                                    uniqueAccount);
+        QVERIFY(update);
+        QCOMPARE(connectProvider(), S_OK);
+
+        CF_SYNC_ROOT_STANDARD_INFO rootAfter = {};
+        QCOMPARE(CfGetSyncRootInfoByPath(nativePath.c_str(), CF_SYNC_ROOT_INFO_STANDARD, &rootAfter, sizeof(rootAfter), &returnedSize), S_OK);
+        QCOMPARE(QString::fromWCharArray(rootAfter.ProviderName), QStringLiteral(APPLICATION_DISPLAY_NAME));
+        QCOMPARE(rootAfter.SyncRootFileId.QuadPart, rootBefore.SyncRootFileId.QuadPart);
+        QCOMPARE(rootAfter.SyncRootIdentityLength, rootBefore.SyncRootIdentityLength);
+        QCOMPARE(rootAfter.HydrationPolicy.Primary, rootBefore.HydrationPolicy.Primary);
+        QCOMPARE(rootAfter.HydrationPolicy.Modifier, rootBefore.HydrationPolicy.Modifier);
+        QCOMPARE(rootAfter.PopulationPolicy.Primary, rootBefore.PopulationPolicy.Primary);
+        QCOMPARE(rootAfter.PopulationPolicy.Modifier, rootBefore.PopulationPolicy.Modifier);
+        QCOMPARE(rootAfter.InSyncPolicy, rootBefore.InSyncPolicy);
+        QCOMPARE(rootAfter.HardLinkPolicy, rootBefore.HardLinkPolicy);
+
+        auto fileAfterBuffer = std::vector<char>(fileBeforeBuffer.size());
+        {
+            const auto handle = cfapi::handleForPath(filePath);
+            QVERIFY(handle);
+            QCOMPARE(CfGetPlaceholderInfo(handle.get(),
+                                          CF_PLACEHOLDER_INFO_STANDARD,
+                                          fileAfterBuffer.data(),
+                                          static_cast<DWORD>(fileAfterBuffer.size()),
+                                          &returnedSize),
+                     S_OK);
+        }
+        const auto fileAfter = reinterpret_cast<const CF_PLACEHOLDER_STANDARD_INFO *>(fileAfterBuffer.data());
+        QCOMPARE(fileAfter->FileId.QuadPart, fileBefore->FileId.QuadPart);
+        QCOMPARE(fileAfter->SyncRootFileId.QuadPart, fileBefore->SyncRootFileId.QuadPart);
+        QCOMPARE(QByteArray(reinterpret_cast<const char *>(fileAfter->FileIdentity), fileAfter->FileIdentityLength), fileIdentity);
+        QCOMPARE(fileAfter->PinState, fileBefore->PinState);
+        QCOMPARE(fileAfter->InSyncState, fileBefore->InSyncState);
+        QCOMPARE(fileAfter->OnDiskDataSize.QuadPart, fileBefore->OnDiskDataSize.QuadPart);
+        // Compare all actual attributes, including sparse/reparse flags.
+        const auto attributesAfter = GetFileAttributesW(nativeFilePath.c_str());
+        QVERIFY(attributesAfter != INVALID_FILE_ATTRIBUTES);
+        QCOMPARE(attributesAfter, attributesBefore);
+    }
+
+    void testPlaceholderUpdateReportsNativeFailure_data()
+    {
+        QTest::addColumn<bool>("basicMetadataOnly");
+        QTest::newRow("all metadata") << false;
+        QTest::newRow("basic metadata") << true;
+    }
+
+    void testPlaceholderUpdateReportsNativeFailure()
+    {
+        QFETCH(bool, basicMetadataOnly);
+        FakeFolder folder{FileInfo{}, {}, {}, false};
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        const auto path = QDir::toNativeSeparators(folder.localPath() + QStringLiteral("metadata.txt"));
+        const auto originalIdentity = QByteArrayLiteral("original-identity");
+        QVERIFY(cfapi::createPlaceholderInfo(path, 1700000000, 1024, originalIdentity));
+        QVERIFY(cfapi::setPinState(path, PinState::OnlineOnly, cfapi::NoRecurse));
+
+        SyncFileItem item;
+        item._type = ItemTypeVirtualFile;
+        item._modtime = 1700000001;
+        item._size = 2048;
+        // Ask Windows to reject an identity larger than the Cloud Files limit.
+        // The pin-state operation would still succeed, masking this failure.
+        item._fileId = QByteArray(CF_PLACEHOLDER_MAX_FILE_IDENTITY_LENGTH + 1, 'x');
+        auto nativeFailure = S_OK;
+        {
+            const auto handle = cfapi::handleForPath(path);
+            QVERIFY(handle);
+            nativeFailure = CfUpdatePlaceholder(handle.get(),
+                                                nullptr,
+                                                item._fileId.constData(),
+                                                static_cast<DWORD>(item._fileId.size()),
+                                                nullptr,
+                                                0,
+                                                CF_UPDATE_FLAG_MARK_IN_SYNC,
+                                                nullptr,
+                                                nullptr);
+            QVERIFY(FAILED(nativeFailure));
+        }
+        const auto result = basicMetadataOnly ? cfapi::updatePlaceholderMarkInSync(path, item, {}) : cfapi::updatePlaceholderInfo(path, item, {});
+        QVERIFY(!result);
+        QVERIFY2(result.error().contains(Utility::formatWinError(nativeFailure)), qPrintable(result.error()));
+        const auto info = cfapi::findPlaceholderInfo(path);
+        QVERIFY(info);
+        QCOMPARE(QByteArray(reinterpret_cast<const char *>(info->FileIdentity), info->FileIdentityLength), originalIdentity);
+        QCOMPARE(info->PinState, CF_PIN_STATE_UNPINNED);
+        QCOMPARE(QFileInfo(path).size(), 1024);
+        QCOMPARE(QFileInfo(path).lastModified().toSecsSinceEpoch(), 1700000000);
+
+        item._fileId = QByteArrayLiteral("updated-identity");
+        const auto retry = basicMetadataOnly ? cfapi::updatePlaceholderMarkInSync(path, item, {}) : cfapi::updatePlaceholderInfo(path, item, {});
+        QVERIFY2(retry, retry ? "" : qPrintable(retry.error()));
+        const auto updatedInfo = cfapi::findPlaceholderInfo(path);
+        QVERIFY(updatedInfo);
+        QCOMPARE(QByteArray(reinterpret_cast<const char *>(updatedInfo->FileIdentity), updatedInfo->FileIdentityLength), item._fileId);
+        QCOMPARE(updatedInfo->PinState, CF_PIN_STATE_UNPINNED);
+        QCOMPARE(QFileInfo(path).size(), basicMetadataOnly ? 1024 : 2048);
+    }
+
+    void testPlaceholderUpdateRejectsEmptyTarget()
+    {
+        FakeFolder folder{FileInfo{}, {}, {}, false};
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        const auto originalPath = QDir::toNativeSeparators(folder.localPath() + QStringLiteral("original.txt"));
+        const auto targetPath = QString{};
+        const auto originalIdentity = QByteArrayLiteral("original-identity");
+        QVERIFY(cfapi::createPlaceholderInfo(originalPath, 1700000000, 1024, originalIdentity));
+        QVERIFY(!cfapi::handleForPath(targetPath));
+
+        SyncFileItem item;
+        item._type = ItemTypeVirtualFile;
+        item._modtime = 1700000001;
+        item._size = 2048;
+        item._fileId = QByteArrayLiteral("updated-identity");
+        // Read the preserved metadata from the original, then fail to open the
+        // destination. The native update must not receive a null handle.
+        const auto result = cfapi::updatePlaceholderInfo(targetPath, item, originalPath);
+        QVERIFY(!result);
+        QCOMPARE(result.error(), QStringLiteral("Could not open placeholder for metadata update: %1").arg(targetPath));
+    }
+
+    void testPlaceholderUpdateJobReportsNativeFailure()
+    {
+        FakeFolder folder{FileInfo{}, {}, {}, false};
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        const auto path = QDir::toNativeSeparators(folder.localPath() + QStringLiteral("metadata-job.txt"));
+        QVERIFY(cfapi::createPlaceholderInfo(path, 1700000000, 1024, QByteArrayLiteral("original-identity")));
+        auto item = SyncFileItemPtr::create();
+        item->_file = QStringLiteral("metadata-job.txt");
+        item->_originalFile = item->_file;
+        item->_fileId = QByteArray(CF_PLACEHOLDER_MAX_FILE_IDENTITY_LENGTH + 1, 'x');
+        item->_modtime = 1700000001;
+        item->_size = 1024;
+        item->_type = ItemTypeVirtualFile;
+        item->_instruction = CSYNC_INSTRUCTION_UPDATE_VFS_METADATA;
+        item->_direction = SyncFileItem::Down;
+        const auto nativeFailure = cfapi::updatePlaceholderMarkInSync(path, *item);
+        QVERIFY(!nativeFailure);
+
+        QSet<QString> bulkUploadBlacklist;
+        OwncloudPropagator propagator(folder.account(), folder.localPath(), QStringLiteral("/"), &folder.syncJournal(), bulkUploadBlacklist);
+        propagator.setSyncOptions(folder.syncEngine().syncOptions());
+        QSignalSpy finished(&propagator, &OwncloudPropagator::finished);
+        QSignalSpy completed(&propagator, &OwncloudPropagator::itemCompleted);
+        propagator.start({item});
+        QTRY_COMPARE(finished.count(), 1);
+        QCOMPARE(completed.count(), 1);
+        QCOMPARE(item->_status, SyncFileItem::NormalError);
+        QCOMPARE(item->_errorString, nativeFailure.error());
+    }
+
+    void testProviderReadiness()
+    {
+        const auto unstartedVfs = createVfsFromPlugin(Vfs::WindowsCfApi);
+        QVERIFY(unstartedVfs);
+        QVERIFY(!unstartedVfs->isReady());
+        FakeFolder folder{FileInfo{}};
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        vfs->stop();
+        QVERIFY(!vfs->isReady());
+    }
+
+    void testBulkPlaceholdersKeepTheirParentDirectories()
+    {
+        FakeFolder folder{FileInfo{}, {}, {}, false};
+        QVERIFY(folder.syncEngine().account()->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("http://localhost/owncloud"))
+                                                                                             : Account::enforcedServerUrl()));
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        QVERIFY(QDir(folder.localPath()).mkpath(QStringLiteral("first")));
+        QVERIFY(QDir(folder.localPath()).mkpath(QStringLiteral("second/nested")));
+        const auto paths =
+            QStringList{QStringLiteral("first/report.txt"), QStringLiteral("second/nested/report.txt"), QStringLiteral("second/nested/other.txt")};
+        auto items = QList<SyncFileItemPtr>{};
+        for (const auto &path : paths) {
+            auto item = SyncFileItemPtr::create();
+            item->_file = path;
+            item->_fileId = path.toUtf8();
+            item->_type = ItemTypeVirtualFile;
+            item->_modtime = 1700000000;
+            item->_size = 1024;
+            items.append(item);
+        }
+        const auto result = vfs->createPlaceholders(items);
+        QVERIFY2(result, result ? "" : qPrintable(result.error()));
+        for (const auto &path : paths) {
+            QVERIFY(QFileInfo::exists(folder.localPath() + path));
+            QVERIFY(cfapi::isSparseFile(folder.localPath() + path));
+            const auto info = cfapi::findPlaceholderInfo(folder.localPath() + path);
+            QVERIFY(info);
+            QCOMPARE(QByteArray(reinterpret_cast<const char *>(info->FileIdentity), info->FileIdentityLength), path.toUtf8());
+        }
+        QVERIFY(!QFileInfo::exists(folder.localPath() + QStringLiteral("first/other.txt")));
+    }
+
+    void testBulkPlaceholdersRecoverPartialCreation()
+    {
+        FakeFolder folder{FileInfo{}, {}, {}, false};
+        QVERIFY(folder.syncEngine().account()->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("http://localhost/owncloud"))
+                                                                                             : Account::enforcedServerUrl()));
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        QVERIFY(vfs->createPlaceholders({}));
+        QVERIFY(cfapi::setPinState(folder.localPath(), PinState::OnlineOnly, cfapi::NoRecurse));
+        auto items = QList<SyncFileItemPtr>{};
+        for (const auto &name : {QStringLiteral("first.txt"), QStringLiteral("second.txt")}) {
+            auto item = SyncFileItemPtr::create();
+            item->_file = name;
+            item->_fileId = name.toUtf8();
+            item->_type = ItemTypeVirtualFile;
+            item->_modtime = 1700000000;
+            item->_size = 1024;
+            items.append(item);
+        }
+        QFile localFile(folder.localPath() + QStringLiteral("second.txt"));
+        QVERIFY(localFile.open(QIODevice::WriteOnly));
+        QCOMPARE(localFile.write("local data"), 10);
+        localFile.close();
+        const auto firstAttempt = vfs->createPlaceholders(items);
+        QVERIFY(!firstAttempt);
+        QVERIFY(firstAttempt.error().contains(QStringLiteral("Cannot create cloud files:")));
+        QVERIFY(localFile.open(QIODevice::ReadOnly));
+        QCOMPARE(localFile.readAll(), QByteArrayLiteral("local data"));
+        localFile.close();
+        QVERIFY(cfapi::isSparseFile(folder.localPath() + QStringLiteral("first.txt")));
+        QVERIFY(localFile.remove());
+        QVERIFY(vfs->createPlaceholders(items));
+        QVERIFY(cfapi::isSparseFile(folder.localPath() + QStringLiteral("second.txt")));
+        QCOMPARE(cfapi::findPlaceholderInfo(folder.localPath() + QStringLiteral("first.txt"))->PinState, CF_PIN_STATE_UNPINNED);
+        auto changedMetadata = SyncFileItemPtr::create(*items.first());
+        ++changedMetadata->_modtime;
+        QVERIFY(!vfs->createPlaceholders({changedMetadata}));
+        auto differentIdentity = SyncFileItemPtr::create(*items.first());
+        differentIdentity->_fileId = QByteArrayLiteral("another-remote-file");
+        QVERIFY(!vfs->createPlaceholders({differentIdentity}));
+        {
+            const auto handle = cfapi::handleForPath(folder.localPath() + QStringLiteral("first.txt"));
+            QCOMPARE(CfSetInSyncState(handle.get(), CF_IN_SYNC_STATE_NOT_IN_SYNC, CF_SET_IN_SYNC_FLAG_NONE, nullptr), S_OK);
+        }
+        QVERIFY(!vfs->createPlaceholders({items.first()}));
+        items.first()->_modtime = 0;
+        QVERIFY(!vfs->createPlaceholders(items));
+    }
+
+    void testBulkPlaceholderFailuresHaveAnExplanation()
+    {
+        FakeFolder folder{FileInfo{}, {}, {}, false};
+        QVERIFY(folder.syncEngine().account()->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(QStringLiteral("http://localhost/owncloud"))
+                                                                                             : Account::enforcedServerUrl()));
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        QSet<QString> bulkUploadBlacklist;
+        OwncloudPropagator propagator(folder.account(), folder.localPath(), QStringLiteral("/"), &folder.syncJournal(), bulkUploadBlacklist);
+        propagator.setSyncOptions(folder.syncEngine().syncOptions());
+        QSignalSpy finished(&propagator, &OwncloudPropagator::finished);
+        QSignalSpy completed(&propagator, &OwncloudPropagator::itemCompleted);
+        const auto item = SyncFileItemPtr::create();
+        item->_file = QStringLiteral("bad-time.txt");
+        item->_originalFile = item->_file;
+        item->_fileId = QByteArrayLiteral("file-id");
+        item->_modtime = 0;
+        item->_type = ItemTypeVirtualFile;
+        item->_instruction = CSYNC_INSTRUCTION_NEW;
+        item->_direction = SyncFileItem::Down;
+        propagator.start({item});
+        QTRY_COMPARE(finished.count(), 1);
+        QCOMPARE(completed.count(), 1);
+        QCOMPARE(item->_status, SyncFileItem::NormalError);
+        QVERIFY(item->_errorString.contains(QStringLiteral("invalid modification time")));
+        QVERIFY(!QFileInfo::exists(folder.localPath() + item->_file));
+    }
+
+    void testNativeCallbackShutdownGate()
+    {
+        const auto vfs = createVfsFromPlugin(Vfs::WindowsCfApi);
+        QVERIFY(vfs);
+        QVERIFY(!vfs->hasPendingFileOperations());
+        auto entries = 0;
+        const auto finishEntries = qScopeGuard([&] {
+            while (entries-- > 0) {
+                QMetaObject::invokeMethod(vfs.get(), "endNativeFetch", Qt::DirectConnection);
+            }
+        });
+        const auto enter = [&] {
+            auto accepted = false;
+            const auto invoked = QMetaObject::invokeMethod(vfs.get(), "beginNativeFetch", Qt::DirectConnection, Q_RETURN_ARG(bool, accepted));
+            if (accepted) {
+                ++entries;
+            }
+            return invoked && accepted;
+        };
+        const auto leave = [&] {
+            --entries;
+            return QMetaObject::invokeMethod(vfs.get(), "endNativeFetch", Qt::DirectConnection);
+        };
+        QVERIFY(enter());
+        QVERIFY(enter());
+        QVERIFY(vfs->hasPendingFileOperations());
+        // File and folder callbacks may both be waiting for their queued UI work.
+        vfs->setShutdownRequested(true);
+        QVERIFY(!enter());
+        QVERIFY(leave());
+        QVERIFY(vfs->hasPendingFileOperations());
+        QVERIFY(leave());
+        QVERIFY(!vfs->hasPendingFileOperations());
+        QVERIFY(!enter());
+        // A bounded shutdown timeout restores ordinary file access.
+        vfs->setShutdownRequested(false);
+        QVERIFY(enter());
+        QVERIFY(leave());
+        QVERIFY(!vfs->hasPendingFileOperations());
+    }
+
+    void testNativeCallbackShutdownGateAcrossThreads()
+    {
+        const auto vfs = createVfsFromPlugin(Vfs::WindowsCfApi);
+        QVERIFY(vfs);
+        QSemaphore entered;
+        QSemaphore release;
+        auto worker = QtConcurrent::run([&] {
+            auto accepted = false;
+            const auto invoked = QMetaObject::invokeMethod(vfs.get(), "beginNativeFetch", Qt::DirectConnection, Q_RETURN_ARG(bool, accepted));
+            entered.release();
+            if (!invoked || !accepted) {
+                return false;
+            }
+            const auto finishEntry = qScopeGuard([&] {
+                QMetaObject::invokeMethod(vfs.get(), "endNativeFetch", Qt::DirectConnection);
+            });
+            constexpr int callbackWaitDeadlineMs = 5000;
+            return release.tryAcquire(1, callbackWaitDeadlineMs);
+        });
+        const auto finishWorker = qScopeGuard([&] {
+            release.release();
+            worker.waitForFinished();
+        });
+        QVERIFY(entered.tryAcquire(1, 5000));
+        vfs->setShutdownRequested(true);
+        QVERIFY(vfs->hasPendingFileOperations());
+        auto accepted = true;
+        QVERIFY(QMetaObject::invokeMethod(vfs.get(), "beginNativeFetch", Qt::DirectConnection, Q_RETURN_ARG(bool, accepted)));
+        QVERIFY(!accepted);
+        release.release();
+        QTRY_VERIFY(worker.isFinished());
+        QVERIFY(worker.result());
+        QVERIFY(!vfs->hasPendingFileOperations());
+    }
+
+    void testExplicitlyAuthorizedDriveAliasHydration()
+    {
+        if (qEnvironmentVariable("PRIVATECLOUD_TEST_DRIVE_MAPPING") != QStringLiteral("1")) {
+            QSKIP("Real drive hydration requires explicit opt-in for the authorized X: development drive.");
+        }
+        QCOMPARE(PrivateCloudDrive::driveRoot(), QStringLiteral("X:/"));
+        QVERIFY(PrivateCloudDrive::isEnabled());
+        wchar_t existing[32768] = {};
+        const auto found = QueryDosDeviceW(L"X:", existing, 32768);
+        QVERIFY2(!found && GetLastError() == ERROR_FILE_NOT_FOUND, "X: must be completely unused before this test.");
+        const auto powershell = QStandardPaths::findExecutable(QStringLiteral("powershell.exe"));
+        QVERIFY2(!powershell.isEmpty(), "Windows PowerShell is required for the isolated file reader.");
+
+        FakeFolder folder{FileInfo{}, {}, {}, false};
+        const auto account = folder.syncEngine().account();
+        QVERIFY(account->setUrl(Account::enforcedServerUrl()));
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+
+        const auto fileName = QStringLiteral("alias-hydration.bin");
+        constexpr int contentSize = 8192;
+        constexpr char contentByte = 'P';
+        folder.remoteModifier().insert(fileName, contentSize, contentByte);
+        const auto remoteFile = folder.remoteModifier().find(fileName);
+        QVERIFY(remoteFile);
+        SyncJournalFileRecord record;
+        record._path = fileName.toUtf8();
+        record._type = ItemTypeVirtualFile;
+        record._fileId = remoteFile->fileId;
+        record._etag = remoteFile->etag;
+        record._fileSize = contentSize;
+        record._modtime = remoteFile->lastModified.toSecsSinceEpoch();
+        const auto item = SyncFileItem::fromSyncJournalFileRecord(record);
+        const auto placeholderResult = vfs->createPlaceholder(*item);
+        QVERIFY(placeholderResult);
+        record = item->toSyncJournalFileRecordWithInode(folder.localPath() + fileName);
+        QVERIFY(folder.syncJournal().setFileRecord(record));
+        CFVERIFY_VIRTUAL(folder, fileName);
+
+        auto propertyRequests = 0;
+        auto downloads = 0;
+        auto unexpectedRequests = 0;
+        auto nativeCallbackTracked = false;
+        folder.setServerOverride([&](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            // The shared fake DAV replies use /owncloud paths. Keep the production
+            // request on the enforced server, adapting only this fixture's response.
+            auto fixtureRequest = request;
+            auto fixtureUrl = request.url();
+            fixtureUrl.setPath(sRootUrl2.path() + fileName);
+            fixtureRequest.setUrl(fixtureUrl);
+            if (request.url().path().endsWith(u'/' + fileName)) {
+                if (request.attribute(QNetworkRequest::CustomVerbAttribute).toByteArray() == QByteArrayLiteral("PROPFIND")) {
+                    ++propertyRequests;
+                    nativeCallbackTracked = vfs->hasPendingFileOperations();
+                    return new FakePropfindReply(folder.remoteModifier(), operation, fixtureRequest, folder.networkAccessManager(), true);
+                }
+                if (operation == QNetworkAccessManager::GetOperation) {
+                    ++downloads;
+                    return new FakeGetReply(folder.remoteModifier(), operation, fixtureRequest, folder.networkAccessManager());
+                }
+            }
+            ++unexpectedRequests;
+            return new FakeErrorReply(operation, request, folder.networkAccessManager(), 404);
+        });
+        QSignalSpy ready(vfs.data(), SIGNAL(hydrationRequestReady(QString)));
+        QSignalSpy failed(vfs.data(), SIGNAL(hydrationRequestFailed(QString)));
+        QVERIFY(ready.isValid());
+        QVERIFY(failed.isValid());
+
+        const auto mountError = PrivateCloudDrive::mount(folder.localPath());
+        QVERIFY2(mountError.isEmpty(), qPrintable(mountError));
+        const auto unmountDrive = qScopeGuard([&folder] {
+            PrivateCloudDrive::unmount(folder.localPath());
+        });
+        QCOMPARE(GetDriveTypeW(L"X:\\"), UINT(DRIVE_FIXED));
+
+        QProcess reader;
+        const auto stopReader = qScopeGuard([&reader, &vfs] {
+            if (reader.state() != QProcess::NotRunning) {
+                reader.kill();
+                reader.waitForFinished(5000);
+            }
+            vfs->stop();
+        });
+        reader.start(powershell,
+                     {QStringLiteral("-NoProfile"),
+                      QStringLiteral("-NonInteractive"),
+                      QStringLiteral("-Command"),
+                      QStringLiteral("[Convert]::ToBase64String([System.IO.File]::ReadAllBytes('X:\\alias-hydration.bin'))")});
+        QVERIFY(reader.waitForStarted(5000));
+        QTRY_VERIFY_WITH_TIMEOUT(reader.state() == QProcess::NotRunning, 30000);
+        QCOMPARE(reader.exitStatus(), QProcess::NormalExit);
+        const auto readerErrors = reader.readAllStandardError();
+        QVERIFY2(readerErrors.isEmpty(), readerErrors.constData());
+        QCOMPARE(reader.exitCode(), 0);
+        QCOMPARE(QByteArray::fromBase64(reader.readAllStandardOutput().trimmed()), QByteArray(contentSize, contentByte));
+        QCOMPARE(propertyRequests, 1);
+        QCOMPARE(downloads, 1);
+        QCOMPARE(unexpectedRequests, 0);
+        QVERIFY(nativeCallbackTracked);
+        QCOMPARE(ready.count(), 1);
+        QCOMPARE(failed.count(), 0);
+        QTRY_VERIFY(!vfs->hasPendingFileOperations());
+        QVERIFY(!vfs->isDehydratedPlaceholder(folder.localPath() + fileName));
+        QVERIFY(QFileInfo::exists(folder.localPath() + fileName));
+    }
+
+    void testActiveHydrationDuplicateCanBeCancelled()
+    {
+        FakeFolder folder{FileInfo{}};
+        const auto vfs = setupVfs(folder);
+        QVERIFY(vfs->isReady());
+        folder.remoteModifier().insert("file", 32);
+        QVERIFY(folder.syncOnce());
+        CFVERIFY_VIRTUAL(folder, "file");
+        auto propertyRequests = 0;
+        auto downloads = 0;
+        folder.setServerOverride([&](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            if (operation == QNetworkAccessManager::GetOperation) {
+                ++downloads;
+            }
+            if (request.attribute(QNetworkRequest::CustomVerbAttribute).toByteArray() == QByteArrayLiteral("PROPFIND")) {
+                ++propertyRequests;
+            }
+            return nullptr;
+        });
+        QSignalSpy ready(vfs.data(), SIGNAL(hydrationRequestReady(QString)));
+        QSignalSpy failed(vfs.data(), SIGNAL(hydrationRequestFailed(QString)));
+        QSignalSpy finished(vfs.data(), SIGNAL(hydrationRequestFinished(QString)));
+        QVERIFY(ready.isValid());
+        QVERIFY(failed.isValid());
+        QVERIFY(finished.isValid());
+        const auto requestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const auto filePath = QDir::toNativeSeparators(folder.localPath() + QStringLiteral("file"));
+        QVERIFY(QMetaObject::invokeMethod(vfs.data(), "requestHydration", Qt::DirectConnection, Q_ARG(QString, requestId), Q_ARG(QString, filePath)));
+        QTRY_COMPARE(ready.count(), 1);
+        QVERIFY(vfs->isHydrating());
+        const auto checksBeforeDuplicate = propertyRequests;
+        QVERIFY(QMetaObject::invokeMethod(vfs.data(), "requestHydration", Qt::DirectConnection, Q_ARG(QString, requestId), Q_ARG(QString, filePath)));
+        QCOMPARE(failed.count(), 1);
+        QCOMPARE(ready.count(), 1);
+        QCOMPARE(propertyRequests, checksBeforeDuplicate);
+        QVERIFY(QMetaObject::invokeMethod(vfs.data(), "cancelHydration", Qt::DirectConnection, Q_ARG(QString, requestId), Q_ARG(QString, filePath)));
+        QTRY_COMPARE(finished.count(), 1);
+        QCOMPARE(finished.at(0).at(0).toString(), requestId);
+        QCOMPARE(downloads, 0);
+        CFVERIFY_VIRTUAL(folder, "file");
+        vfs->stop();
+    }
+
+    void testStoragePolicyHydrationDenial_data()
+    {
+        QTest::addColumn<QString>("scenario");
+        QTest::newRow("external") << QStringLiteral("external");
+        QTest::newRow("external-session") << QStringLiteral("external-session");
+        QTest::newRow("missing mount type") << QStringLiteral("missing");
+        QTest::newRow("canceled during check") << QStringLiteral("cancel");
+        QTest::newRow("stopped during check") << QStringLiteral("stop");
+        QTest::newRow("journal changed during check") << QStringLiteral("changed");
+    }
+
+    void testStoragePolicyHydrationDenial()
+    {
+        QFETCH(QString, scenario);
+        FakeFolder folder{FileInfo{}};
+        const auto vfs = setupVfs(folder);
+        folder.remoteModifier().insert("file", 32);
+        QVERIFY(folder.syncOnce());
+        CFVERIFY_VIRTUAL(folder, "file");
+        const auto originalRecord = dbRecord(folder, QStringLiteral("file"));
+
+        if (scenario.startsWith(QStringLiteral("external"))) {
+            folder.remoteModifier().find("file")->extraDavProperties = QStringLiteral("<nc:mount-type>%1</nc:mount-type>").arg(scenario).toUtf8();
+        }
+
+        auto propertyRequests = 0;
+        auto completedChecks = 0;
+        auto downloads = 0;
+        folder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *outgoingData) -> QNetworkReply * {
+            if (op == QNetworkAccessManager::GetOperation) {
+                ++downloads;
+            }
+            if (request.attribute(QNetworkRequest::CustomVerbAttribute).toByteArray() != QByteArrayLiteral("PROPFIND")) {
+                return nullptr;
+            }
+            ++propertyRequests;
+            const auto requestedType = outgoingData && outgoingData->peek(outgoingData->bytesAvailable()).contains("mount-type");
+            auto *reply = new FakePropfindReply(folder.remoteModifier(),
+                                                op,
+                                                request,
+                                                folder.networkAccessManager(),
+                                                requestedType && scenario != QStringLiteral("missing"));
+            connect(reply, &QNetworkReply::finished, this, [&] {
+                ++completedChecks;
+            });
+            return reply;
+        });
+
+        QSignalSpy ready(vfs.data(), SIGNAL(hydrationRequestReady(QString)));
+        QSignalSpy failed(vfs.data(), SIGNAL(hydrationRequestFailed(QString)));
+        QVERIFY(ready.isValid());
+        QVERIFY(failed.isValid());
+        const auto requestId = QStringLiteral("storage-policy-check");
+        const auto filePath = QDir::toNativeSeparators(folder.localPath() + QStringLiteral("file"));
+        QVERIFY(QMetaObject::invokeMethod(vfs.data(), "requestHydration", Qt::DirectConnection, Q_ARG(QString, requestId), Q_ARG(QString, filePath)));
+        QCOMPARE(propertyRequests, 1);
+
+        if (scenario == QStringLiteral("cancel")) {
+            QVERIFY(QMetaObject::invokeMethod(vfs.data(), "cancelHydration", Qt::DirectConnection, Q_ARG(QString, requestId), Q_ARG(QString, filePath)));
+        } else if (scenario == QStringLiteral("stop")) {
+            vfs->stop();
+        } else if (scenario == QStringLiteral("changed")) {
+            auto changedRecord = originalRecord;
+            changedRecord._etag = QByteArrayLiteral("changed-during-check");
+            QVERIFY(folder.syncJournal().setFileRecord(changedRecord));
+        }
+
+        QTRY_COMPARE(completedChecks, 1);
+        QCOMPARE(failed.count(), 1);
+        QCOMPARE(ready.count(), 0);
+        QCOMPARE(downloads, 0);
+        QVERIFY(!vfs->isHydrating());
+        QCOMPARE(dbRecord(folder, QStringLiteral("file"))._type, ItemTypeVirtualFile);
+        QCOMPARE(dbRecord(folder, QStringLiteral("file"))._fileId, originalRecord._fileId);
+        QVERIFY(QFileInfo::exists(filePath));
+
+        if (scenario == QStringLiteral("stop")) {
+            QVERIFY(QMetaObject::invokeMethod(vfs.data(), "requestHydration", Qt::DirectConnection, Q_ARG(QString, requestId), Q_ARG(QString, filePath)));
+            QCOMPARE(failed.count(), 2);
+            QCOMPARE(propertyRequests, 1);
+        }
     }
 
     void testVirtualFileLifecycle_data()
@@ -1606,15 +2365,11 @@ private Q_SLOTS:
 
         cleanup();
 
-        OCC::showInFileManager(fakeFolder.localPath() + "first folder");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "first folder"));
 
         QVERIFY(fakeFolder.syncOnce());
 
-        OCC::showInFileManager(fakeFolder.localPath() + "first folder");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "first folder"));
 
         const auto file3Info = fakeFolder.localModifier().find("first folder/file3");
         QVERIFY(file3Info.exists());
@@ -1625,9 +2380,7 @@ private Q_SLOTS:
 
         QVERIFY(fakeFolder.syncOnce());
 
-        OCC::showInFileManager(fakeFolder.localPath() + "first folder/second folder");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "first folder/second folder"));
 
         const auto secondFile3Info = fakeFolder.localModifier().find("first folder/second folder/second file3");
         QVERIFY(secondFile3Info.exists());
@@ -1674,15 +2427,11 @@ private Q_SLOTS:
 
         cleanup();
 
-        OCC::showInFileManager(fakeFolder.localPath() + "second folder");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "second folder"));
 
         QVERIFY(fakeFolder.syncOnce());
 
-        OCC::showInFileManager(fakeFolder.localPath() + "second folder");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "second folder"));
 
         const auto file3Info = fakeFolder.localModifier().find("second folder/second file3");
         QVERIFY(file3Info.exists());
@@ -1693,9 +2442,7 @@ private Q_SLOTS:
 
         QVERIFY(fakeFolder.syncOnce());
 
-        OCC::showInFileManager(fakeFolder.localPath() + "second folder/third folder");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "second folder/third folder"));
 
         const auto secondFile3Info = fakeFolder.localModifier().find("second folder/third folder/third file3");
         QVERIFY(secondFile3Info.exists());
@@ -1792,17 +2539,11 @@ private Q_SLOTS:
         QVERIFY(itemInstruction(completeSpy, "fileFromRoot.txt", CSYNC_INSTRUCTION_NEW));
         cleanup();
 
-        OCC::showInFileManager(fakeFolder.localPath() + "zdirectory");
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "zdirectory"));
 
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "zdirectory"));
 
-        OCC::showInFileManager(fakeFolder.localPath() + "zdirectory");
-
-        QTest::qWait(5000);
-
-        OCC::showInFileManager(fakeFolder.localPath() + "zdirectory/zsubdir");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "zdirectory/zsubdir"));
 
         const auto afileFromDirectoryInfo = fakeFolder.localModifier().find("zdirectory/afileFromDirectory.txt");
         QVERIFY(afileFromDirectoryInfo.exists());
@@ -1852,16 +2593,12 @@ private Q_SLOTS:
 
         cleanup();
 
-        OCC::showInFileManager(fakeFolder.localPath() + "perso");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "perso"));
 
         QVERIFY(fakeFolder.syncOnce());
         QCOMPARE(completeSpy.size(), 0);
 
-        OCC::showInFileManager(fakeFolder.localPath() + "perso");
-
-        QTest::qWait(5000);
+        QVERIFY(enumerateCloudFolder(fakeFolder.localPath() + "perso"));
 
         cleanup();
         fakeFolder.syncOnce();

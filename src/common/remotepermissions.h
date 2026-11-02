@@ -42,16 +42,19 @@ public:
         IsShared,                 // S
         IsMounted,                // M
         IsMountedSub,             // m (internal: set if the parent dir has IsMounted)
+        IsExternalStorage, // e (internal: nc:mount-type is external or external-session)
 
         // Note: when adding support for more permissions, we need to invalid the cache in the database.
         // (by setting forceRemoteDiscovery in SyncJournalDb::checkConnect)
-        PermissionsCount = IsMountedSub
+        PermissionsCount = IsExternalStorage,
     };
 
     enum class MountedPermissionAlgorithm {
         UseMountRootProperty,
         WildGuessMountedSubProperty,
     };
+
+    [[nodiscard]] static bool isExternalStorageType(const QString &mountType);
 
     /// null permissions
     RemotePermissions() = default;

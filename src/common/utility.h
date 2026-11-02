@@ -94,6 +94,19 @@ namespace Utility {
     };
 #endif
 
+    /** Returns an error when the sync root uses blocked or unverified local storage. */
+    OCSYNC_EXPORT QString syncRootStorageError(const QString &path);
+
+#ifdef Q_OS_WIN
+    enum class LocalStorageType {
+        Unknown,
+        Internal,
+        External,
+        Network,
+    };
+    OCSYNC_EXPORT LocalStorageType localStorageType(const QString &path);
+#endif
+
     OCSYNC_EXPORT int rand();
     OCSYNC_EXPORT void sleep(int sec);
     OCSYNC_EXPORT void usleep(int usec);

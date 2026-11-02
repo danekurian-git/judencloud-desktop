@@ -92,6 +92,10 @@ QString AccountSetupFromCommandLineJob::defaultLocalDirPath() const
 
 bool AccountSetupFromCommandLineJob::handleAccountSetupFromCommandLine()
 {
+    if (!Account::isServerUrlAllowed(_serverUrl)) {
+        printAccountSetupFromCommandLineStatusAndExit(QStringLiteral("This client cannot connect to a different server."), true);
+        return false;
+    }
     if (AccountManager::instance()->accountFromUserId(QStringLiteral("%1@%2").arg(_userId, _serverUrl.host()))) {
         printAccountSetupFromCommandLineStatusAndExit(QStringLiteral("Account %1 already exists!").arg(QDir::toNativeSeparators(_userId)), true);
         return false;
@@ -125,12 +129,16 @@ bool AccountSetupFromCommandLineJob::handleAccountSetupFromCommandLine()
         }
     }
 
-    const auto credentials = new WebFlowCredentials(_userId, _appPassword);
     _account = AccountManager::createAccount();
+    if (!_account->setUrl(_serverUrl)) {
+        printAccountSetupFromCommandLineStatusAndExit(QStringLiteral("This client cannot connect to a different server."), true);
+        return false;
+    }
+
+    const auto credentials = new WebFlowCredentials(_userId, _appPassword);
 
     _account->setCredentials(credentials);
     _account->setCredentialSetting(u"user"_s, _userId);
-    _account->setUrl(_serverUrl);
 
     // The account is only added, saved and given a sync folder once the credentials have
     // been checked against the server, so that a failed setup leaves nothing behind. Both
@@ -228,8 +236,12 @@ void AccountSetupFromCommandLineJob::accountSetupFromCommandLinePropfindHandleFa
             redirectUrl.setPath(path);
 
             qCInfo(lcAccountSetupCommandLineJob) << "Setting account url to" << redirectUrl.toString();
-            _account->setUrl(redirectUrl);
+            if (!_account->setUrl(redirectUrl)) {
+                printAccountSetupFromCommandLineStatusAndExit(QStringLiteral("The server redirected this account to a server that is not allowed."), true);
+                return;
+            }
             checkLastModifiedWithPropfind();
+            return;
         }
         errorMsg = tr("The authenticated request to the server was redirected to "
                       "\"%1\". The URL is bad, the server is misconfigured.")

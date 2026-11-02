@@ -93,8 +93,8 @@ public:
      * Use and redefine this if the human readable name contains spaces,
      * special chars and such.
      *
-     * By default, the name is derived from the APPLICATION_NAME
-     * cmake variable.
+     * The name is derived from the APPLICATION_DISPLAY_NAME CMake variable.
+     * It must not be used as a persistent settings or credential identifier.
      *
      * @return QString with human readable app name.
      */

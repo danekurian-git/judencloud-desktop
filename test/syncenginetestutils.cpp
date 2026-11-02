@@ -42,17 +42,17 @@ PathComponents::PathComponents(const QStringList &pathComponents)
 
 PathComponents PathComponents::parentDirComponents() const
 {
-    return PathComponents { mid(0, size() - 1) };
+    return PathComponents{mid(0, size() - 1)};
 }
 
 PathComponents PathComponents::subComponents() const &
 {
-    return PathComponents { mid(1) };
+    return PathComponents{mid(1)};
 }
 
 void DiskFileModifier::remove(const QString &relativePath)
 {
-    QFileInfo fi { _rootDir.filePath(relativePath) };
+    QFileInfo fi{_rootDir.filePath(relativePath)};
     if (fi.isFile()) {
         QVERIFY(_rootDir.remove(relativePath));
     } else {
@@ -381,8 +381,12 @@ FileInfo *FileInfo::findInvalidatingEtags(PathComponents pathComponents)
     return find(std::move(pathComponents), EtagsAction::Invalidate);
 }
 
-FakePropfindReply::FakePropfindReply(FileInfo &remoteRootFileInfo, QNetworkAccessManager::Operation op, const QNetworkRequest &request, QObject *parent)
-    : FakeReply { parent }
+FakePropfindReply::FakePropfindReply(FileInfo &remoteRootFileInfo,
+                                     QNetworkAccessManager::Operation op,
+                                     const QNetworkRequest &request,
+                                     QObject *parent,
+                                     bool mountTypeRequested)
+    : FakeReply{parent}
 {
     setRequest(request);
     setUrl(request.url());
@@ -470,6 +474,9 @@ FakePropfindReply::FakePropfindReply(FileInfo &remoteRootFileInfo, QNetworkAcces
         }
         xml.writeTextElement(ncUri, QStringLiteral("is-encrypted"), fileInfo.isEncrypted ? QString::number(1) : QString::number(0));
         xml.writeTextElement(ncUri, QStringLiteral("metadata-files-live-photo"), fileInfo.isLivePhoto ? QString::number(1) : QString::number(0));
+        if (mountTypeRequested && !fileInfo.extraDavProperties.contains("mount-type")) {
+            xml.writeTextElement(ncUri, QStringLiteral("mount-type"), fileInfo.isShared ? QStringLiteral("shared") : QString{});
+        }
         buffer.write(fileInfo.extraDavProperties);
         xml.writeEndElement(); // prop
         xml.writeTextElement(davUri, QStringLiteral("status"), QStringLiteral("HTTP/1.1 200 OK"));
@@ -1187,6 +1194,7 @@ QNetworkReply *FakeQNAM::createRequest(QNetworkAccessManager::Operation op, cons
     } else {
         qInfo() << "Operation" << op << request.url();
     }
+    const auto mountTypeRequested = outgoingData && outgoingData->peek(outgoingData->bytesAvailable()).contains("mount-type");
     QNetworkReply *reply = nullptr;
     auto newRequest = request;
     newRequest.setRawHeader("X-Request-ID", OCC::AccessManager::generateRequestId());
@@ -1207,8 +1215,7 @@ QNetworkReply *FakeQNAM::createRequest(QNetworkAccessManager::Operation op, cons
 
         auto verb = newRequest.attribute(QNetworkRequest::CustomVerbAttribute).toString();
         if (verb == QLatin1String("PROPFIND")) {
-            // Ignore outgoingData always returning something good enough, works for now.
-            reply = new FakePropfindReply { info, op, newRequest, this };
+            reply = new FakePropfindReply{info, op, newRequest, this, mountTypeRequested};
         } else if (verb == QLatin1String("GET") || op == QNetworkAccessManager::GetOperation) {
             reply = new FakeGetReply { info, op, newRequest, this };
         } else if (verb == QLatin1String("PUT") || op == QNetworkAccessManager::PutOperation) {
@@ -1280,8 +1287,11 @@ FakeFolder::FakeFolder(const FileInfo &fileTemplate, const OCC::Optional<FileInf
     _fakeQnam = new FakeQNAM(fileTemplate);
     _account = OCC::Account::create();
     _accountState = new FakeAccountState(_account);
-    _account->setUrl(QUrl(QStringLiteral("http://admin:admin@localhost/owncloud")));
-    _account->setCredentials(new FakeCredentials { _fakeQnam });
+    const auto enforcedUrl = OCC::Account::enforcedServerUrl();
+    // FakeCredentials routes every request to FakeQNAM. Keep branded builds
+    // inside their URL policy while using the same in-memory server transport.
+    ENFORCE(_account->setUrl(enforcedUrl.isEmpty() ? QUrl(QStringLiteral("http://admin:admin@localhost/owncloud")) : enforcedUrl));
+    _account->setCredentials(new FakeCredentials{_fakeQnam});
     _account->setDavDisplayName(QStringLiteral("fakename"));
     _account->setServerVersion(_serverVersion);
     _fakeQnam->setServerVersion(_serverVersion);

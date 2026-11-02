@@ -8,20 +8,29 @@
  * any purpose.
  */
 
-#include <qglobal.h>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <qglobal.h>
 
 #include "QtTest/qtestcase.h"
-#include "common/utility.h"
-#include "folderman.h"
 #include "account.h"
 #include "accountstate.h"
-#include <accountmanager.h>
+#include "common/utility.h"
 #include "configfile.h"
+#include "folderman.h"
+#include "libsync/privateclouddrive.h"
 #include "socketapi/socketapi.h"
 #include "syncenginetestutils.h"
 #include "testhelper.h"
+#include <accountmanager.h>
+
+#ifdef Q_OS_WIN
+namespace OCC
+{
+OCSYNC_EXPORT extern std::function<Utility::LocalStorageType(const QString &)> localStorageTypeOverride;
+}
+#endif
 
 using namespace Qt::StringLiterals;
 using namespace OCC;
@@ -38,7 +47,7 @@ bool itemDidCompleteSuccessfully(const ItemCompletedSpy &spy, const QString &pat
     return false;
 }
 
-class TestFolderMan: public QObject
+class TestFolderMan : public QObject
 {
     Q_OBJECT
 
@@ -55,6 +64,285 @@ private Q_SLOTS:
 
         QStandardPaths::setTestModeEnabled(true);
     }
+
+    void testPrivateCloudSetupPendingSettingsRoundTrip()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QSettings settings(dir.filePath(QStringLiteral("folder.ini")), QSettings::IniFormat);
+        FolderDefinition definition;
+        definition.localPath = FolderDefinition::prepareLocalPath(dir.path());
+        definition.targetPath = QStringLiteral("/");
+        definition.alias = QStringLiteral("pending-drive");
+        definition.paused = true;
+        for (const auto pending : {true, false}) {
+            definition.privateCloudSetupPending = pending;
+            FolderDefinition::save(settings, definition);
+            settings.sync();
+            QSettings reloadedSettings(settings.fileName(), QSettings::IniFormat);
+            FolderDefinition reloaded;
+            QVERIFY(FolderDefinition::load(reloadedSettings, definition.alias, &reloaded));
+            QCOMPARE(reloaded.privateCloudSetupPending, pending);
+            QCOMPARE(reloaded.paused, definition.paused);
+            QCOMPARE(reloaded.localPath, definition.localPath);
+        }
+        settings.remove(QStringLiteral("privateCloudSetupPending"));
+        FolderDefinition legacy;
+        legacy.privateCloudSetupPending = true;
+        QVERIFY(FolderDefinition::load(settings, definition.alias, &legacy));
+        QVERIFY(!legacy.privateCloudSetupPending);
+    }
+
+#ifdef Q_OS_WIN
+    void testNewFolderUsesCreateDirectoryPermissionWithoutCreatingIt()
+    {
+        const auto defaultPath = PrivateCloudDrive::defaultSetupPath();
+        if (QFileInfo::exists(defaultPath)) {
+            QSKIP("The read-only default-folder regression requires the default folder to be absent.");
+        }
+        const auto canOpenWithAccess = [](const DWORD access) {
+            const Utility::UniqueHandle handle(CreateFileW(L"C:\\",
+                                                           access,
+                                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                                           nullptr,
+                                                           OPEN_EXISTING,
+                                                           FILE_FLAG_BACKUP_SEMANTICS,
+                                                           nullptr));
+            return handle.get() != INVALID_HANDLE_VALUE;
+        };
+        if (canOpenWithAccess(FILE_ADD_FILE) || !canOpenWithAccess(FILE_ADD_SUBDIRECTORY)) {
+            QSKIP("This token does not have the standard Windows root distinction: subfolder creation allowed, file creation denied.");
+        }
+        QTemporaryDir config;
+        QVERIFY(config.isValid());
+        const auto previousConfig = ConfigFile().configPath();
+        FolderMan::resetInstance();
+        const auto restore = qScopeGuard([previousConfig] {
+            FolderMan::resetInstance();
+            ConfigFile::setConfDir(previousConfig);
+        });
+        QVERIFY(ConfigFile::setConfDir(config.path()));
+        _fm = FolderMan::instance();
+        const auto existingRoot = _fm->checkPathValidityForNewFolder(QStringLiteral("C:/"));
+        QCOMPARE(existingRoot.first, FolderMan::PathValidityResult::ErrorRecursiveValidity);
+        QVERIFY(!existingRoot.second.isEmpty());
+        const auto newFolder = _fm->checkPathValidityForNewFolder(defaultPath);
+        QVERIFY2(newFolder.second.isEmpty(), qPrintable(newFolder.second));
+        const auto nestedFolder = _fm->checkPathValidityForNewFolder(defaultPath + QStringLiteral("/nested/child"));
+        QVERIFY2(nestedFolder.second.isEmpty(), qPrintable(nestedFolder.second));
+        QVERIFY(!QFileInfo::exists(defaultPath));
+    }
+
+    void testExternalStorageRejected()
+    {
+        FolderMan::resetInstance();
+        _fm = FolderMan::instance();
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QScopedValueRollback scope(localStorageTypeOverride);
+        for (const auto type : {Utility::LocalStorageType::External, Utility::LocalStorageType::Unknown}) {
+            localStorageTypeOverride = [type](const QString &) {
+                return type;
+            };
+            const auto result = _fm->checkPathValidityForNewFolder(dir.path() + QStringLiteral("/new-folder"));
+            QCOMPARE(result.first, FolderMan::PathValidityResult::ErrorRecursiveValidity);
+            QVERIFY(!result.second.isEmpty());
+            QVERIFY(!QFileInfo::exists(dir.path() + QStringLiteral("/new-folder")));
+        }
+        for (const auto type : {Utility::LocalStorageType::Internal, Utility::LocalStorageType::Network}) {
+            localStorageTypeOverride = [type](const QString &) {
+                return type;
+            };
+            QVERIFY(_fm->checkPathValidityForNewFolder(dir.path() + QStringLiteral("/new-folder")).second.isEmpty());
+        }
+    }
+
+    void testExternalStorageStartupPreservesLegacyJournal()
+    {
+        FolderMan::resetInstance();
+        _fm = FolderMan::instance();
+        QTemporaryDir localDir;
+        QTemporaryDir settingsDir;
+        QVERIFY(localDir.isValid());
+        QVERIFY(settingsDir.isValid());
+        const auto sentinelNames = QStringList{QStringLiteral(".nextcloudpermissions.log"), QStringLiteral(".nextcloudsync.log")};
+        for (const auto &name : sentinelNames) {
+            QFile sentinel(localDir.filePath(name));
+            QVERIFY(sentinel.open(QIODevice::WriteOnly));
+            QCOMPARE(sentinel.write("do-not-change"), qint64(13));
+        }
+        const auto account = Account::create();
+        account->setUrl(QUrl(QStringLiteral("https://example.com")));
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto state = AccountStatePtr(new FakeAccountState(account));
+        FolderDefinition definition;
+        definition.localPath = localDir.path();
+        definition.targetPath = QStringLiteral("/");
+        definition.alias = QStringLiteral("blocked-legacy-folder");
+        definition.journalPath = settingsDir.filePath(QStringLiteral("legacy.db"));
+        QFile journal(definition.absoluteJournalPath());
+        QVERIFY(journal.open(QIODevice::WriteOnly));
+        QCOMPARE(journal.write("preserved"), qint64(9));
+        journal.close();
+        QSettings settings(settingsDir.filePath(QStringLiteral("folders.ini")), QSettings::IniFormat);
+        settings.beginGroup(definition.alias);
+        FolderDefinition::save(settings, definition);
+        settings.endGroup();
+        QScopedValueRollback scope(localStorageTypeOverride);
+        localStorageTypeOverride = [](const QString &) {
+            return Utility::LocalStorageType::External;
+        };
+        _fm->setupFoldersHelper(settings, state, {}, true, false);
+        const auto folder = _fm->folder(definition.alias);
+        QVERIFY(folder);
+        QCOMPARE(folder->syncResult().status(), SyncResult::SetupError);
+        QCOMPARE(folder->journalDb()->databaseFilePath(), definition.journalPath);
+        QVERIFY(journal.open(QIODevice::ReadOnly));
+        QCOMPARE(journal.readAll(), QByteArray("preserved"));
+        QCoreApplication::processEvents();
+        QVERIFY(!folder->findChild<FolderWatcher *>());
+        for (const auto &name : sentinelNames) {
+            QFile sentinel(localDir.filePath(name));
+            QVERIFY(sentinel.open(QIODevice::ReadOnly));
+            QCOMPARE(sentinel.readAll(), QByteArray("do-not-change"));
+        }
+        QCOMPARE(QDir(localDir.path()).entryList(QDir::Files | QDir::Hidden), sentinelNames);
+        FolderMan::resetInstance();
+    }
+
+    void testExternalStorageLegacyMigrationPreservesFiles()
+    {
+        FolderMan::resetInstance();
+        _fm = FolderMan::instance();
+        QTemporaryDir localDir;
+        QTemporaryDir settingsDir;
+        QVERIFY(localDir.isValid());
+        QVERIFY(settingsDir.isValid());
+        const auto previousConfigPath = ConfigFile().configPath();
+        const auto restoreConfig = qScopeGuard([previousConfigPath] {
+            ConfigFile::setConfDir(previousConfigPath);
+        });
+        QVERIFY(ConfigFile::setConfDir(settingsDir.path()));
+        const auto account = Account::create();
+        account->setUrl(QUrl(QStringLiteral("https://example.com")));
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto state = AccountStatePtr(new FakeAccountState(account));
+        FolderDefinition definition;
+        definition.localPath = localDir.path();
+        definition.targetPath = QStringLiteral("/");
+        definition.alias = QStringLiteral("blocked-old-config");
+        definition.journalPath = QStringLiteral("legacy.db");
+        QFile journal(definition.absoluteJournalPath());
+        QVERIFY(journal.open(QIODevice::WriteOnly));
+        QCOMPARE(journal.write("preserved"), qint64(9));
+        journal.close();
+        const auto legacyFilePath = settingsDir.filePath(QStringLiteral("old.cfg"));
+        const auto legacyGroup = QStringLiteral("Accounts/%1/Folders/%2").arg(account->id(), definition.alias);
+        const auto legacyBlacklist = QStringList{QStringLiteral("keep-excluded/")};
+        {
+            QSettings settings(legacyFilePath, QSettings::IniFormat);
+            settings.beginGroup(legacyGroup);
+            FolderDefinition::save(settings, definition);
+            settings.setValue(QStringLiteral("blackList"), legacyBlacklist);
+            settings.sync();
+        }
+        QScopedValueRollback scope(localStorageTypeOverride);
+        localStorageTypeOverride = [](const QString &) {
+            return Utility::LocalStorageType::External;
+        };
+        _fm->setupLegacyFolder(legacyFilePath, state.data());
+        const auto folder = _fm->folder(definition.alias);
+        QVERIFY(folder);
+        QCOMPARE(folder->syncResult().status(), SyncResult::SetupError);
+        QVERIFY(journal.open(QIODevice::ReadOnly));
+        QCOMPARE(journal.readAll(), QByteArray("preserved"));
+        QCOMPARE(QDir(localDir.path()).entryList(QDir::Files | QDir::Hidden), QStringList{QStringLiteral("legacy.db")});
+        QSettings legacySettings(legacyFilePath, QSettings::IniFormat);
+        QCOMPARE(legacySettings.value(legacyGroup + QStringLiteral("/blackList")).toStringList(), legacyBlacklist);
+        const auto savedSettings = state->settings();
+        QCOMPARE(savedSettings->value(QStringLiteral("Folders/%1/localPath").arg(definition.alias)).toString(), definition.localPath);
+        FolderMan::resetInstance();
+    }
+
+    void testExternalStorageVfsTogglePreservesPlaceholder()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto account = Account::create();
+        account->setUrl(QUrl(QStringLiteral("https://example.com")));
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto state = AccountStatePtr(new FakeAccountState(account));
+        FolderDefinition definition;
+        definition.localPath = dir.path();
+        definition.targetPath = QStringLiteral("/");
+        definition.alias = QStringLiteral("blocked-vfs-folder");
+        definition.journalPath = QStringLiteral(".sync_test.db");
+        definition.virtualFilesMode = Vfs::WithSuffix;
+        auto vfs = createVfsFromPlugin(Vfs::WithSuffix);
+        QVERIFY(vfs);
+        const auto placeholderName = QStringLiteral("keep.txt") + vfs->fileSuffix();
+        QFile placeholder(dir.filePath(placeholderName));
+        QVERIFY(placeholder.open(QIODevice::WriteOnly));
+        QCOMPARE(placeholder.write(" "), qint64(1));
+        placeholder.close();
+        QScopedValueRollback scope(localStorageTypeOverride);
+        localStorageTypeOverride = [](const QString &) {
+            return Utility::LocalStorageType::External;
+        };
+        Folder folder(definition, state.data(), std::move(vfs));
+        auto journal = folder.journalDb();
+        QVERIFY(journal->open());
+        SyncJournalFileRecord record;
+        record._path = placeholderName.toUtf8();
+        record._type = ItemTypeVirtualFile;
+        record._fileId = QByteArray("placeholder-id");
+        record._etag = QByteArray("unchanged-etag");
+        record._modtime = 1700000000;
+        record._fileSize = 100;
+        QVERIFY(journal->setFileRecord(record));
+
+        folder.setVirtualFilesEnabled(false);
+        folder.switchToVirtualFiles();
+        folder.setRootPinState(PinState::OnlineOnly);
+        QCOMPARE(folder.vfs().mode(), Vfs::WithSuffix);
+        QVERIFY(placeholder.open(QIODevice::ReadOnly));
+        QCOMPARE(placeholder.readAll(), QByteArray(" "));
+        SyncJournalFileRecord preserved;
+        QVERIFY(journal->getFileRecord(record._path, &preserved));
+        QVERIFY(preserved.isValid());
+        QCOMPARE(preserved._type, ItemTypeVirtualFile);
+        QCOMPARE(preserved._fileId, record._fileId);
+        QCOMPARE(preserved._etag, record._etag);
+    }
+
+    void testExternalStorageAddPreservesJournal()
+    {
+        FolderMan::resetInstance();
+        _fm = FolderMan::instance();
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto account = Account::create();
+        account->setUrl(QUrl(QStringLiteral("https://example.com")));
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto state = AccountStatePtr(new FakeAccountState(account));
+        FolderDefinition definition;
+        definition.localPath = dir.path();
+        definition.targetPath = QStringLiteral("/");
+        definition.alias = QStringLiteral("external-storage-test");
+        definition.journalPath = definition.defaultJournalPath(account);
+        QFile journal(definition.absoluteJournalPath());
+        QVERIFY(journal.open(QIODevice::WriteOnly));
+        QCOMPARE(journal.write("preserve-existing-journal"), qint64(25));
+        journal.close();
+        QScopedValueRollback scope(localStorageTypeOverride);
+        localStorageTypeOverride = [](const QString &) {
+            return Utility::LocalStorageType::External;
+        };
+        QVERIFY(!_fm->addFolder(state.data(), definition));
+        QVERIFY(journal.open(QIODevice::ReadOnly));
+        QCOMPARE(journal.readAll(), QByteArray("preserve-existing-journal"));
+    }
+#endif
 
     void testDeleteEncryptedFiles()
     {
@@ -93,7 +381,7 @@ private Q_SLOTS:
                 const QUrlQuery urlQuery(req.url());
                 const auto formatParam = urlQuery.queryItemValue(QStringLiteral("format"));
 
-                if(fileId == fakeFileId && formatParam == QStringLiteral("json")) {
+                if (fileId == fakeFileId && formatParam == QStringLiteral("json")) {
                     reply = new FakePayloadReply(op, req, QJsonDocument().toJson(), this);
                 } else {
                     reply = new FakeErrorReply(op, req, this, 400, fake400Response);
@@ -106,11 +394,12 @@ private Q_SLOTS:
         fakeQnam->setOverride(fakeQnamOverride);
 
         const auto account = Account::create();
-        const auto capabilities = QVariantMap {
-            {QStringLiteral("end-to-end-encryption"), QVariantMap {
-                {QStringLiteral("enabled"), true},
-                {QStringLiteral("api-version"), QString::number(2.0)},
-            }},
+        const auto capabilities = QVariantMap{
+            {QStringLiteral("end-to-end-encryption"),
+             QVariantMap{
+                 {QStringLiteral("enabled"), true},
+                 {QStringLiteral("api-version"), QString::number(2.0)},
+             }},
         };
         account->setCapabilities(capabilities);
         account->setCredentials(new FakeCredentials{fakeQnam});
@@ -230,12 +519,12 @@ private Q_SLOTS:
                 return reply;
             }
 
-           fakeFolder.remoteModifier().remove(filePathRelative);
-           reply = new FakePayloadReply(op, req, {}, nullptr);
+            fakeFolder.remoteModifier().remove(filePathRelative);
+            reply = new FakePayloadReply(op, req, {}, nullptr);
 
-           Q_EMIT incomingShareDeleted();
+            Q_EMIT incomingShareDeleted();
 
-           return reply;
+            return reply;
         });
 
         QSignalSpy incomingShareDeletedSignal(this, &TestFolderMan::incomingShareDeleted);
@@ -295,7 +584,7 @@ private Q_SLOTS:
         QUrl url("http://example.de");
         auto *cred = new HttpCredentialsTest("testuser", "secret");
         account->setCredentials(cred);
-        account->setUrl( url );
+        account->setUrl(url);
 
         AccountStatePtr newAccountState(new AccountState(account));
         FolderMan *folderman = FolderMan::instance();
@@ -334,8 +623,12 @@ private Q_SLOTS:
         // The following both fail because they are already sync folders even if for another account
         QUrl url3("http://anotherexample.org");
         url3.setUserName("dummy");
-        QCOMPARE(folderman->checkPathValidityForNewFolder(dirPath + "/sub/ownCloud1", url3).second, QString("Please choose a different location. %1 is already being used as a sync folder.").arg(QDir::toNativeSeparators(dirPath + "/sub/ownCloud1")));
-        QCOMPARE(folderman->checkPathValidityForNewFolder(dirPath + "/ownCloud2", url3).second, QString("Please choose a different location. %1 is already being used as a sync folder.").arg(QDir::toNativeSeparators(dirPath + "/ownCloud2")));
+        QCOMPARE(folderman->checkPathValidityForNewFolder(dirPath + "/sub/ownCloud1", url3).second,
+                 QString("Please choose a different location. %1 is already being used as a sync folder.")
+                     .arg(QDir::toNativeSeparators(dirPath + "/sub/ownCloud1")));
+        QCOMPARE(
+            folderman->checkPathValidityForNewFolder(dirPath + "/ownCloud2", url3).second,
+            QString("Please choose a different location. %1 is already being used as a sync folder.").arg(QDir::toNativeSeparators(dirPath + "/ownCloud2")));
 
         QVERIFY(!folderman->checkPathValidityForNewFolder(dirPath).second.isNull());
         QVERIFY(!folderman->checkPathValidityForNewFolder(dirPath + "/sub/ownCloud1/folder").second.isNull());
@@ -358,7 +651,8 @@ private Q_SLOTS:
         // link 3 points to an existing sync folder. To make it fail, the account must be the same
         QVERIFY(!folderman->checkPathValidityForNewFolder(dirPath + "/link3", url2).second.isNull());
         // while with a different account, this is fine
-        QCOMPARE(folderman->checkPathValidityForNewFolder(dirPath + "/link3", url3).second, QString("Please choose a different location. %1 is already being used as a sync folder.").arg(dirPath + "/link3"));
+        QCOMPARE(folderman->checkPathValidityForNewFolder(dirPath + "/link3", url3).second,
+                 QString("Please choose a different location. %1 is already being used as a sync folder.").arg(dirPath + "/link3"));
 
         QVERIFY(!folderman->checkPathValidityForNewFolder(dirPath + "/link4").second.isNull());
         QVERIFY(!folderman->checkPathValidityForNewFolder(dirPath + "/link3/folder").second.isNull());
@@ -394,7 +688,6 @@ private Q_SLOTS:
         // Invalid paths
         QVERIFY(!folderman->checkPathValidityForNewFolder("").second.isNull());
 
-
         // REMOVE ownCloud2 from the filesystem, but keep a folder sync'ed to it.
         QDir(dirPath + "/ownCloud2/").removeRecursively();
         QVERIFY(!folderman->checkPathValidityForNewFolder(dirPath + "/ownCloud2/blublu").second.isNull());
@@ -424,7 +717,7 @@ private Q_SLOTS:
         QUrl url("http://example.de");
         auto *cred = new HttpCredentialsTest("testuser", "secret");
         account->setCredentials(cred);
-        account->setUrl( url );
+        account->setUrl(url);
         url.setUserName(cred->user());
 
         AccountStatePtr newAccountState(new AccountState(account));
@@ -435,8 +728,7 @@ private Q_SLOTS:
 
         // TEST
 
-        QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/oc", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath),
-                 QString(dirPath + "/oc"));
+        QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/oc", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath), QString(dirPath + "/oc"));
         QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/ownCloud", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath),
                  QString(dirPath + "/ownCloud3"));
         QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/ownCloud2", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath),
@@ -445,16 +737,15 @@ private Q_SLOTS:
                  QString(dirPath + "/ownCloud2/foo"));
         QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/ownCloud2/bar", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath),
                  QString(dirPath + "/ownCloud2/bar"));
-        QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/sub", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath),
-                 QString(dirPath + "/sub2"));
+        QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/sub", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath), QString(dirPath + "/sub2"));
 
         // REMOVE ownCloud2 from the filesystem, but keep a folder sync'ed to it.
         // We should still not suggest this folder as a new folder.
         QDir(dirPath + "/ownCloud2/").removeRecursively();
         QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/ownCloud", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath),
-            QString(dirPath + "/ownCloud3"));
+                 QString(dirPath + "/ownCloud3"));
         QCOMPARE(folderman->findGoodPathForNewSyncFolder(dirPath + "/ownCloud2", url, FolderMan::GoodPathStrategy::AllowOnlyNewPath),
-            QString(dirPath + "/ownCloud22"));
+                 QString(dirPath + "/ownCloud22"));
     }
 
     void testProcessingFileIdsPushNotification()
@@ -483,7 +774,12 @@ private Q_SLOTS:
         auto user1 = createAccount("user1");
         auto user2 = createAccount("user2");
 
-        const auto addFolderForTesting = [this, &dirPath](AccountState * const account, const QString &alias, const QString &localPath, const QString &targetPath, const int rootFileId, const QList<qint64> &fileIds) -> void {
+        const auto addFolderForTesting = [this, &dirPath](AccountState *const account,
+                                                          const QString &alias,
+                                                          const QString &localPath,
+                                                          const QString &targetPath,
+                                                          const int rootFileId,
+                                                          const QList<qint64> &fileIds) -> void {
             FolderDefinition definition;
             definition.alias = alias;
             definition.localPath = dirPath + localPath;
@@ -506,7 +802,8 @@ private Q_SLOTS:
             }
         };
 
-        const auto verifyFolderSyncChangesOnReceivedFileIdNotification = [this](AccountState * const user, const QList<qint64> &fileIds, const QStringList &expectedFolderAliasesToSync) -> void {
+        const auto verifyFolderSyncChangesOnReceivedFileIdNotification =
+            [this](AccountState *const user, const QList<qint64> &fileIds, const QStringList &expectedFolderAliasesToSync) -> void {
             QStringList folderAliasesToBeSynced = {};
 
             _fm->_scheduledFolders.clear();
@@ -521,10 +818,8 @@ private Q_SLOTS:
             for (const auto &signalParameters : std::as_const(spy)) {
                 QVERIFY(signalParameters.size() == 1);
                 const auto folderAlias = signalParameters.front().value<Folder *>()->alias();
-                QVERIFY2(
-                    expectedFolderAliasesToSync.contains(folderAlias),
-                    qPrintable("Unexpected folder alias '%1'; expected were [%2]"_L1.arg(folderAlias, expectedFolderAliasesToSync.join(", ")))
-                );
+                QVERIFY2(expectedFolderAliasesToSync.contains(folderAlias),
+                         qPrintable("Unexpected folder alias '%1'; expected were [%2]"_L1.arg(folderAlias, expectedFolderAliasesToSync.join(", "))));
                 folderAliasesToBeSynced.append(folderAlias);
             }
 
@@ -533,26 +828,26 @@ private Q_SLOTS:
             QCOMPARE(folderAliasesToBeSynced, expectedFolderAliasesToSync);
         };
 
-        addFolderForTesting(user1, "0", "/user1_root",      "/",          10, {11, 12, 13, 50});
+        addFolderForTesting(user1, "0", "/user1_root", "/", 10, {11, 12, 13, 50});
         addFolderForTesting(user1, "1", "/user1_subfolder", "/subfolder", 15, {16, 17, 18, 50});
-        addFolderForTesting(user2, "2", "/user2_root",      "/",          20, {21, 22, 23, 50});
+        addFolderForTesting(user2, "2", "/user2_root", "/", 20, {21, 22, 23, 50});
 
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {10},                  {"0"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {11},                  {"0"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {13, 11},              {"0"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {15},                  {"1"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {16},                  {"1"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {18, 16},              {"1"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {15, 11},              {"0", "1"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {11, 16, 21},          {"0", "1"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {50},                  {"0", "1"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {10}, {"0"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {11}, {"0"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {13, 11}, {"0"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {15}, {"1"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {16}, {"1"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {18, 16}, {"1"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {15, 11}, {"0", "1"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {11, 16, 21}, {"0", "1"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {50}, {"0", "1"});
         verifyFolderSyncChangesOnReceivedFileIdNotification(user1, {20, 21, 22, 23, 404}, {});
 
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {20},                  {"2"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {21},                  {"2"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {23, 21},              {"2"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {11, 16, 21},          {"2"});
-        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {50},                  {"2"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {20}, {"2"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {21}, {"2"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {23, 21}, {"2"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {11, 16, 21}, {"2"});
+        verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {50}, {"2"});
         verifyFolderSyncChangesOnReceivedFileIdNotification(user2, {10, 11, 17, 18, 404}, {});
     }
 
@@ -628,8 +923,7 @@ private Q_SLOTS:
 
         for (const auto state : disconnectedStates) {
             accountState->setStateForTesting(state);
-            QVERIFY2(!FolderMan::canPollFileProviderEtag(*accountState),
-                qPrintable(AccountState::stateString(state)));
+            QVERIFY2(!FolderMan::canPollFileProviderEtag(*accountState), qPrintable(AccountState::stateString(state)));
         }
     }
 

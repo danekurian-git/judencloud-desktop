@@ -58,6 +58,8 @@ public:
     QString targetPath;
     /// whether the folder is paused
     bool paused = false;
+    /// Whether privateCloud drive setup must complete before normal use.
+    bool privateCloudSetupPending = false;
     /// whether the folder syncs hidden files
     bool ignoreHiddenFiles = false;
     /// Which virtual files setting the folder uses
@@ -198,6 +200,8 @@ public:
     void setSyncPaused(bool);
 
     [[nodiscard]] bool syncPaused() const;
+    [[nodiscard]] bool privateCloudSetupPending() const;
+    void setPrivateCloudSetupPending(bool pending);
 
     /**
      * Returns true when the folder may sync.
@@ -244,6 +248,7 @@ public:
     [[nodiscard]] SyncJournalDb *journalDb() const { return &_journal; }
     [[nodiscard]] SyncEngine &syncEngine() const { return *_engine; }
     [[nodiscard]] Vfs &vfs() const { return *_vfs; }
+    [[nodiscard]] bool ensureVfsReady();
 
     [[nodiscard]] RequestEtagJob *etagJob() const { return _requestEtagJob; }
     [[nodiscard]] std::chrono::milliseconds msecSinceLastSync() const { return std::chrono::milliseconds(_timeSinceLastSyncDone.elapsed()); }
@@ -532,6 +537,8 @@ private:
     void showSyncResultPopup();
 
     bool checkLocalPath();
+
+    bool checkAdoptedBackingPath();
 
     SyncOptions initializeSyncOptions() const;
 

@@ -161,7 +161,7 @@ private:
     bool _ignoredFirst = false;
     // Set to true if this is the root path and we need to check the data-fingerprint
     bool _isRootPath = false;
-    // If this directory is an external storage (The first item has 'M' in its permission)
+    // The first response identifies external storage via nc:mount-type.
     bool _isExternalStorage = false;
     // If this directory is e2ee
     SyncFileItem::EncryptionStatus _encryptionStatusCurrent = SyncFileItem::EncryptionStatus::NotEncrypted;

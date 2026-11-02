@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "directConnectionHelperRequired": @PRIVATECLOUD_DIRECT_HELPER_REQUIRED@,
+  "service": "privateCloudDirectBroker",
+  "installScope": "machine"
+}

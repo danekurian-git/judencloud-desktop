@@ -800,7 +800,12 @@ void OwncloudPropagator::setSyncOptions(const SyncOptions &syncOptions)
 
 bool OwncloudPropagator::localFileNameClash(const QString &relFile)
 {
-    const QString file(_localDir + relFile);
+    return localFileNameClash(_localDir, relFile);
+}
+
+bool OwncloudPropagator::localFileNameClash(const QString &localDir, const QString &relFile)
+{
+    const QString file(localDir + relFile);
     Q_ASSERT(!file.isEmpty());
 
     if (!file.isEmpty() && Utility::fsCasePreserving()) {
@@ -1848,6 +1853,8 @@ void PropagateVfsUpdateMetadataJob::start()
     Q_EMIT propagator()->touchedFile(fullFileName);
     if (!result) {
         qCWarning(lcPropagator()) << "error when updating VFS metadata" << result.error();
+        done(SyncFileItem::NormalError, result.error(), ErrorCategory::GenericError);
+        return;
     }
     done(SyncFileItem::Success, {}, {});
 }

@@ -1138,6 +1138,13 @@ void AccountSettings::slotEnableVfsCurrentFolder()
                 QObject::disconnect(*connection);
             }
 
+            const auto storageError = Utility::syncRootStorageError(folder->path());
+            if (!storageError.isEmpty()) {
+                folder->setVfsOnOffSwitchPending(false);
+                QMessageBox::warning(this, tr("Synchronization is stopped"), storageError);
+                return;
+            }
+
             qCInfo(lcAccountSettings) << "Enabling vfs support for folder" << folder->path();
 
             // Wipe selective sync blacklist
@@ -1215,6 +1222,13 @@ void AccountSettings::slotDisableVfsCurrentFolder()
         const auto switchVfsOff = [folder, connection, this]() {
             if (*connection) {
                 QObject::disconnect(*connection);
+            }
+
+            const auto storageError = Utility::syncRootStorageError(folder->path());
+            if (!storageError.isEmpty()) {
+                folder->setVfsOnOffSwitchPending(false);
+                QMessageBox::warning(this, tr("Synchronization is stopped"), storageError);
+                return;
             }
 
             qCInfo(lcAccountSettings) << "Disabling vfs support for folder" << folder->path();

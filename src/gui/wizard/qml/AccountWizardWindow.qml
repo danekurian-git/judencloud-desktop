@@ -24,16 +24,18 @@ WizardStyledWindow {
     height: compactHeight
     minimumWidth: Style.accountWizardWindowWidth
     minimumHeight: compactHeight
-    title: ""
+    title: controller && controller.privateCloudMode ? controller.appName : ""
     function defaultHeightForCurrentStep() {
         return controller && controller.currentStep === AccountWizardController.SyncOptionsStep
+            && !controller.privateCloudMode
             ? syncOptionsHeight
             : compactHeight
     }
 
     Component.onCompleted: {
         root.height = root.defaultHeightForCurrentStep()
-        if (root.controller && root.controller.startLoginFlowAutomatically) {
+        if (root.controller && root.controller.currentStep === AccountWizardController.ServerStep
+            && root.controller.startLoginFlowAutomatically) {
             Qt.callLater(function() {
                 root.controller.submitServerUrl()
             })
@@ -216,7 +218,9 @@ WizardStyledWindow {
                 case AccountWizardController.BasicAuthStep:
                     return basicAuthPage
                 case AccountWizardController.SyncOptionsStep:
-                    return syncOptionsPage
+                    return root.controller.privateCloudMode ? privateCloudFolderPage : syncOptionsPage
+                case AccountWizardController.DriveSetupStep:
+                    return driveSetupPage
                 default:
                     return serverPage
                 }
@@ -235,7 +239,7 @@ WizardStyledWindow {
                 visible: root.controller
                     && root.controller.currentStep !== AccountWizardController.ServerStep
                     && root.controller.currentStep !== AccountWizardController.BrowserAuthStep
-                enabled: root.controller && !root.controller.busy
+                enabled: root.controller && (!root.controller.busy || root.controller.privateCloudMode)
                 Layout.fillWidth: root.controller
                     && (root.controller.currentStep === AccountWizardController.BasicAuthStep
                         || root.controller.currentStep === AccountWizardController.SyncOptionsStep)
@@ -244,11 +248,15 @@ WizardStyledWindow {
                         || root.controller.currentStep === AccountWizardController.SyncOptionsStep)
                     ? 1
                     : implicitWidth
-                text: root.controller && root.controller.currentStep === AccountWizardController.SyncOptionsStep
+                text: root.controller && (root.controller.currentStep === AccountWizardController.SyncOptionsStep
+                        || root.controller.currentStep === AccountWizardController.DriveSetupStep
+                        || root.controller.privateCloudMode)
                         ? qsTr("Cancel")
                         : qsTr("Back")
                 onClicked: {
-                    if (root.controller.currentStep === AccountWizardController.SyncOptionsStep) {
+                    if (root.controller.currentStep === AccountWizardController.SyncOptionsStep
+                        || root.controller.currentStep === AccountWizardController.DriveSetupStep
+                        || root.controller.privateCloudMode) {
                         root.controller.cancel()
                     } else {
                         root.controller.goBack()
@@ -257,7 +265,9 @@ WizardStyledWindow {
             },
 
             WizardButton {
+                objectName: "wizardSkipFolderButton"
                 visible: root.controller && root.controller.currentStep === AccountWizardController.SyncOptionsStep
+                    && !root.controller.privateCloudMode
                 enabled: root.controller && !root.controller.busy
                 text: qsTr("Set up later")
                 Layout.fillWidth: true
@@ -266,8 +276,10 @@ WizardStyledWindow {
             },
 
             WizardButton {
+                objectName: "wizardAdvancedOptionsButton"
                 visible: root.controller
                     && root.controller.currentStep === AccountWizardController.SyncOptionsStep
+                    && !root.controller.privateCloudMode
                     && root.controller.hasAdvancedOptions
                 enabled: root.controller && !root.controller.busy
                 text: qsTr("Advanced")
@@ -278,6 +290,7 @@ WizardStyledWindow {
 
             WizardButton {
                 visible: root.controller && root.controller.currentStep === AccountWizardController.ServerStep
+                    && !root.controller.privateCloudMode
                 enabled: root.controller && !root.controller.busy
                 text: qsTr("Sign up")
                 textSuffix: "\u2197"
@@ -288,6 +301,7 @@ WizardStyledWindow {
 
             WizardButton {
                 visible: root.controller && root.controller.currentStep === AccountWizardController.ServerStep
+                    && !root.controller.privateCloudMode
                 enabled: root.controller && !root.controller.busy
                 text: qsTr("Self-host")
                 textSuffix: "\u2197"
@@ -302,6 +316,7 @@ WizardStyledWindow {
                 visible: root.controller
                     && root.controller.currentStep === AccountWizardController.ServerStep
                     && root.controller.proxySettingsAvailable
+                    && !root.controller.privateCloudMode
                 enabled: root.controller && !root.controller.busy
                 flat: true
                 text: qsTr("Proxy settings")
@@ -331,6 +346,7 @@ WizardStyledWindow {
             },
 
             WizardButton {
+                objectName: "wizardFinishButton"
                 visible: root.controller
                     && root.controller.currentStep !== AccountWizardController.ServerStep
                     && root.controller.currentStep !== AccountWizardController.BrowserAuthStep
@@ -355,9 +371,11 @@ WizardStyledWindow {
                     }
                     switch (root.controller.currentStep) {
                     case AccountWizardController.BasicAuthStep:
-                        return qsTr("Connect")
+                        return root.controller.privateCloudMode ? qsTr("Sign in") : qsTr("Connect")
                     case AccountWizardController.SyncOptionsStep:
-                        return qsTr("Done")
+                        return root.controller.privateCloudMode ? qsTr("Connect drive") : qsTr("Done")
+                    case AccountWizardController.DriveSetupStep:
+                        return qsTr("Retry")
                     default:
                         return qsTr("Log in")
                     }
@@ -368,6 +386,7 @@ WizardStyledWindow {
                         root.controller.submitBasicAuth()
                         break
                     case AccountWizardController.SyncOptionsStep:
+                    case AccountWizardController.DriveSetupStep:
                         root.controller.finish()
                         break
                     default:
@@ -395,6 +414,23 @@ WizardStyledWindow {
     Component {
         id: basicAuthPage
         BasicAuthPage {
+            controller: root.controller
+        }
+    }
+
+    Component {
+        id: driveSetupPage
+        BrowserAuthPage {
+            objectName: "privateCloudSetupPage"
+            controller: root.controller
+            titleText: qsTr("Setting up privateCloud")
+            descriptionText: qsTr("Your files will appear in your privateCloud drive and download when you open them.")
+        }
+    }
+
+    Component {
+        id: privateCloudFolderPage
+        PrivateCloudFolderPage {
             controller: root.controller
         }
     }

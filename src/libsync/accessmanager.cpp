@@ -4,21 +4,25 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-#include <QLoggingCategory>
-#include <QNetworkRequest>
-#include <QNetworkReply>
-#include <QNetworkProxy>
 #include <QAuthenticator>
-#include <QSslConfiguration>
+#include <QLoggingCategory>
 #include <QNetworkCookie>
 #include <QNetworkCookieJar>
 #include <QNetworkInformation>
+#include <QNetworkProxy>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QSslConfiguration>
 #include <QUuid>
 
-#include "cookiejar.h"
+#include <QPointer>
+
 #include "accessmanager.h"
 #include "common/utility.h"
+#include "cookiejar.h"
 #include "httplogger.h"
+#include "privatecloudblockedreply.h"
+#include "privatecloudtransport.h"
 
 using namespace Qt::StringLiterals;
 
@@ -30,6 +34,23 @@ AccessManager::AccessManager(QObject *parent)
     : QNetworkAccessManager(parent)
 {
     setCookieJar(new CookieJar);
+    PrivateCloudTransport::apply(this);
+    connect(PrivateCloudTransport::instance(), &PrivateCloudTransport::configurationChanged, this, [this] {
+        if (!PrivateCloudTransport::isRequired()) {
+            return;
+        }
+        auto replies = QList<QPointer<QNetworkReply>>{};
+        for (const auto reply : findChildren<QNetworkReply *>(QString(), Qt::FindDirectChildrenOnly)) {
+            replies.append(reply);
+        }
+        for (const auto &reply : replies) {
+            if (reply && !reply->isFinished()) {
+                reply->abort();
+            }
+        }
+        clearConnectionCache();
+        PrivateCloudTransport::apply(this);
+    });
 
     // Enable HSTS (HTTP Strict Transport Security) for all connections
     enableStrictTransportSecurityStore(true);
@@ -52,7 +73,7 @@ QByteArray AccessManager::generateRequestId()
 
 QNetworkReply *AccessManager::createRequest(QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *outgoingData)
 {
-    const auto opToText = [] (QNetworkAccessManager::Operation op) -> QByteArray {
+    const auto opToText = [](QNetworkAccessManager::Operation op) -> QByteArray {
         auto result = QByteArray{};
         switch (op) {
         case QNetworkAccessManager::HeadOperation:
@@ -82,6 +103,30 @@ QNetworkReply *AccessManager::createRequest(QNetworkAccessManager::Operation op,
     };
 
     QNetworkRequest newRequest(request);
+    const auto localResource = PrivateCloudTransport::allowsLocalResource(request.url());
+    if (PrivateCloudTransport::isRequired() && !localResource) {
+        if (!PrivateCloudTransport::allows(request.url())) {
+            return new PrivateCloudBlockedReply(op,
+                                                request,
+                                                QNetworkReply::ContentAccessDenied,
+                                                tr("The privateCloud direct connection only permits its configured HTTPS server."),
+                                                this);
+        }
+        const auto relayProxy = PrivateCloudTransport::proxy();
+        if (relayProxy.type() != QNetworkProxy::HttpProxy) {
+            return new PrivateCloudBlockedReply(op,
+                                                request,
+                                                QNetworkReply::ProxyConnectionRefusedError,
+                                                tr("The privateCloud direct connection is unavailable. Retry after its local connection helper is ready."),
+                                                this);
+        }
+        // Keep one endpoint snapshot: a concurrent clear must never turn this
+        // request into NoProxy between checking availability and applying it.
+        setProxy(relayProxy);
+        // Redirects must return through this destination check, including jobs
+        // that previously requested Qt's automatic redirect handling.
+        newRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    }
 
     // Respect request specific user agent if any
     if (!newRequest.header(QNetworkRequest::UserAgentHeader).isValid()) {
@@ -120,12 +165,8 @@ QNetworkReply *AccessManager::createRequest(QNetworkAccessManager::Operation op,
     const auto reply = QNetworkAccessManager::createRequest(op, newRequest, outgoingData);
     HttpLogger::logRequest(reply, op, outgoingData);
     QObject::connect(reply, &QNetworkReply::requestSent, reply, [reply] {
-        qCInfo(lcAccessManager()) << "Request has been sent"
-                                  << reply->url().toString()
-                                  << reply->request().rawHeader("X-Request-ID"_ba)
-                                  << reply->header(QNetworkRequest::ContentTypeHeader).toString()
-                                  << reply->rawHeaderPairs()
-                                  << reply;
+        qCInfo(lcAccessManager()) << "Request has been sent" << reply->url().toString() << reply->request().rawHeader("X-Request-ID"_ba)
+                                  << reply->header(QNetworkRequest::ContentTypeHeader).toString() << reply;
     });
     return reply;
 }

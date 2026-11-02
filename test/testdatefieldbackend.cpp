@@ -7,9 +7,11 @@
 
 #include "logger.h"
 
-#include <QTest>
+#include <QDateTime>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QTest>
+#include <QTimeZone>
 
 using namespace OCC;
 
@@ -103,6 +105,45 @@ private Q_SLOTS:
         backend.setDate(invalidMaxDate);
         QVERIFY(!backend.validDate());
         QCOMPARE(validDateChangedSpy.count(), 8);
+    }
+
+    void testMinimumDateMsecsUsesUtc_data()
+    {
+        QTest::addColumn<QDate>("expectedDate");
+        QTest::addColumn<QTime>("inputTime");
+
+        QTest::newRow("year-start") << QDate(2024, 1, 1) << QTime(0, 0);
+        QTest::newRow("after-leap-day") << QDate(2024, 3, 1) << QTime(0, 0);
+        QTest::newRow("year-end") << QDate(2024, 12, 31) << QTime(23, 59, 59);
+    }
+
+    void testMinimumDateMsecsUsesUtc()
+    {
+        QFETCH(QDate, expectedDate);
+        QFETCH(QTime, inputTime);
+        Quick::DateFieldBackend backend;
+
+        backend.setMinimumDateMsecs(QDateTime(expectedDate, inputTime, QTimeZone::utc()).toMSecsSinceEpoch());
+
+        QCOMPARE(backend.minimumDate(), expectedDate);
+        QCOMPARE(backend.minimumDateMsecs(), expectedDate.startOfDay(QTimeZone::utc()).toMSecsSinceEpoch());
+    }
+
+    void testMaximumDateMsecsUsesUtc_data()
+    {
+        testMinimumDateMsecsUsesUtc_data();
+    }
+
+    void testMaximumDateMsecsUsesUtc()
+    {
+        QFETCH(QDate, expectedDate);
+        QFETCH(QTime, inputTime);
+        Quick::DateFieldBackend backend;
+
+        backend.setMaximumDateMsecs(QDateTime(expectedDate, inputTime, QTimeZone::utc()).toMSecsSinceEpoch());
+
+        QCOMPARE(backend.maximumDate(), expectedDate);
+        QCOMPARE(backend.maximumDateMsecs(), expectedDate.startOfDay(QTimeZone::utc()).toMSecsSinceEpoch());
     }
 
     void testDateSettingMethods()

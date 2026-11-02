@@ -48,6 +48,26 @@ namespace OCC {
 
 Q_LOGGING_CATEGORY(lcUtility, "nextcloud.sync.utility", QtInfoMsg)
 
+QString Utility::syncRootStorageError(const QString &path)
+{
+#ifdef Q_OS_WIN
+    switch (localStorageType(path)) {
+    case LocalStorageType::External:
+        return QCoreApplication::translate("Utility", "Syncing folders on external or removable drives is disabled. Choose a folder on an internal drive.");
+    case LocalStorageType::Unknown:
+        return QCoreApplication::translate(
+            "Utility",
+            "The storage type of this folder could not be verified. Synchronization is stopped to protect files on external drives.");
+    case LocalStorageType::Internal:
+    case LocalStorageType::Network:
+        return {};
+    }
+#else
+    Q_UNUSED(path);
+#endif
+    return {};
+}
+
 bool Utility::writeRandomFile(const QString &fname, int size)
 {
     int maxSize = 10 * 10 * 1024;

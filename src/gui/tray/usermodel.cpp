@@ -2306,10 +2306,19 @@ void UserModel::removeAccount(const int id)
         return;
     }
 
+    removeAccountConnection(id);
+}
+
+void UserModel::removeAccountConnection(int id)
+{
+    if (id < 0 || id >= _users.size()) {
+        return;
+    }
     _users[id]->removeAccount();
 
     beginRemoveRows(QModelIndex(), id, id);
-    _users.removeAt(id);
+    auto *removedUser = _users.takeAt(id);
+    removedUser->deleteLater();
     endRemoveRows();
     Q_EMIT countChanged();
 

@@ -585,6 +585,19 @@ bool SyncJournalDb::checkConnect()
     }
 
     bool forceRemoteDiscovery = false;
+    // Older journals cannot distinguish external storage from group or shared mounts.
+    SqlQuery mountTypeVersionQuery("SELECT value FROM key_value_store WHERE key='mount_type_permissions_version';", _db);
+    const auto mountTypeVersionResult = mountTypeVersionQuery.next();
+    if (!mountTypeVersionResult.ok) {
+        return sqlFail(QStringLiteral("Read mount type permissions version"), mountTypeVersionQuery);
+    }
+    if (!mountTypeVersionResult.hasData || mountTypeVersionQuery.intValue(0) < 1) {
+        forceRemoteDiscovery = true;
+        createQuery.prepare("INSERT OR REPLACE INTO key_value_store (key, value) VALUES ('mount_type_permissions_version', '1');");
+        if (!createQuery.exec()) {
+            return sqlFail(QStringLiteral("Update mount type permissions version"), createQuery);
+        }
+    }
 
     SqlQuery versionQuery("SELECT major, minor, patch FROM version;", _db);
     if (!versionQuery.next().hasData) {

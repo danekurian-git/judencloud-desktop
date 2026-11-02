@@ -5,6 +5,7 @@
  */
 
 #include "owncloudgui.h"
+#include "privateclouddrive.h"
 
 #include "account.h"
 #include "accountmanager.h"
@@ -107,7 +108,7 @@ ownCloudGui::ownCloudGui(Application *parent)
     _tray = Systray::instance();
     _tray->setTrayEngine(new QQmlApplicationEngine(this));
     // for the beginning, set the offline icon until the account was verified
-    _tray->setIcon(Theme::instance()->folderOfflineIcon(/*systray?*/ true));
+    _tray->setIcon(PrivateCloudDrive::isEnabled() ? Theme::instance()->applicationIcon() : Theme::instance()->folderOfflineIcon(/*systray?*/ true));
 
     _tray->show();
 
@@ -128,8 +129,7 @@ ownCloudGui::ownCloudGui(Application *parent)
         this, &ownCloudGui::slotShowSettingsForSandboxReapproval);
 #endif
 
-    connect(_tray.data(), &Systray::shutdown,
-        this, &QCoreApplication::quit);
+    connect(_tray.data(), &Systray::shutdown, _app, &Application::requestQuit);
 
     ProgressDispatcher *pd = ProgressDispatcher::instance();
     connect(pd, &ProgressDispatcher::progressInfo, this,
@@ -232,6 +232,10 @@ bool ownCloudGui::cloudProviderApiAvailable()
 // This should rather be in application.... or rather in ConfigFile?
 void ownCloudGui::slotOpenSettingsDialog()
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        _app->showMainDialog();
+        return;
+    }
     // if account is set up, start the configuration wizard.
     if (!AccountManager::instance()->accounts().isEmpty()) {
         if (_settingsDialog.isNull() || QApplication::activeWindow() != _settingsDialog) {
@@ -247,11 +251,23 @@ void ownCloudGui::slotOpenSettingsDialog()
 
 void ownCloudGui::slotOpenMainDialog()
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        _app->showMainDialog();
+        return;
+    }
     _tray->showWindow();
 }
 
 void ownCloudGui::slotTrayClicked(QSystemTrayIcon::ActivationReason reason)
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        if (reason == QSystemTrayIcon::DoubleClick) {
+            _app->openPrivateCloudDrive();
+        } else if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::Unknown) {
+            _app->showMainDialog();
+        }
+        return;
+    }
     const auto currentUser = UserModel::instance()->currentUser();
     if (reason == QSystemTrayIcon::DoubleClick && currentUser && currentUser->hasLocalFolder()) {
         currentUser->openLocalFolder();
@@ -323,8 +339,19 @@ void ownCloudGui::slotNeedToAcceptTermsOfService(const OCC::AccountPtr &account,
     }
 }
 
+void ownCloudGui::setPrivateCloudStatus(const QString &status)
+{
+    if (_tray && PrivateCloudDrive::isEnabled()) {
+        _tray->setToolTip(QStringLiteral("privateCloud\n") + status);
+    }
+}
+
 void ownCloudGui::slotComputeOverallSyncStatus()
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        _tray->setIcon(Theme::instance()->applicationIcon());
+        return;
+    }
     bool allSignedOut = true;
     bool allPaused = true;
     QVector<AccountStatePtr> problemAccounts;
@@ -581,6 +608,9 @@ void ownCloudGui::slotFolderOpenAction(const QString &alias)
 
 void ownCloudGui::slotUpdateProgress(const QString &folder, const ProgressInfo &progress)
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        return;
+    }
     Q_UNUSED(folder);
 
     if (progress.status() == ProgressInfo::Discovery) {
@@ -674,6 +704,10 @@ void ownCloudGui::slotShowGuiMessage(const QString &title, const QString &messag
 
 void ownCloudGui::slotShowSettings()
 {
+    if (PrivateCloudDrive::isEnabled()) {
+        _app->showMainDialog();
+        return;
+    }
     if (_settingsDialog.isNull()) {
         _settingsDialog = new SettingsDialog(this);
         _settingsDialog->setAttribute(Qt::WA_DeleteOnClose, true);

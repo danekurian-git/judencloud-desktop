@@ -497,32 +497,51 @@ bool FileSystem::removeRecursively(const QString &path,
                                    const std::function<void(const QString &path, bool isDir)> &onDeleted,
                                    QStringList *errors,
                                    const std::function<void(const QString &path, bool isDir)> &onError,
-                                   const std::function<bool (const QString &, QString*)> &customDeleteFunction)
+                                   const std::function<bool(const QString &, QString *)> &customDeleteFunction,
+                                   const std::function<bool()> &isCancelled)
 {
+    const auto cancelled = [&isCancelled] {
+        return isCancelled && isCancelled();
+    };
+    if (cancelled()) {
+        return false;
+    }
     if (!FileSystem::setFolderPermissions(path, FileSystem::FolderPermissions::ReadWrite)) {
         if (onError) {
             onError(path, true);
         }
     }
 
+    if (cancelled()) {
+        return false;
+    }
     bool allRemoved = true;
     QDirIterator di(path, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
 
-    while (di.hasNext()) {
+    while (!cancelled() && di.hasNext()) {
+        if (cancelled()) {
+            return false;
+        }
         di.next();
+        if (cancelled()) {
+            return false;
+        }
         const QFileInfo &fi = di.fileInfo();
         bool removeOk = false;
         // The use of isSymLink here is okay:
         // we never want to go into this branch for .lnk files
         bool isDir = FileSystem::isDir(fi.absoluteFilePath()) && !FileSystem::isSymLink(fi.absoluteFilePath()) && !FileSystem::isJunction(fi.absoluteFilePath());
         if (isDir) {
-            removeOk = removeRecursively(joinPath(path, di.fileName()), onDeleted, errors, onError, customDeleteFunction); // recursive
+            removeOk = removeRecursively(joinPath(path, di.fileName()), onDeleted, errors, onError, customDeleteFunction, isCancelled); // recursive
         } else {
             QString removeError;
 
             const auto fileInfo = QFileInfo{di.filePath()};
             const auto parentFolderPath = fileInfo.dir().absolutePath();
             const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};
+            if (cancelled()) {
+                return false;
+            }
             if (customDeleteFunction) {
                 removeOk = customDeleteFunction(di.filePath(), &removeError);
             } else {
@@ -547,11 +566,20 @@ bool FileSystem::removeRecursively(const QString &path,
             allRemoved = false;
         }
     }
+    if (cancelled()) {
+        return false;
+    }
     if (allRemoved) {
         const auto fileInfo = QFileInfo{path};
         const auto parentFolderPath = fileInfo.dir().absolutePath();
         const auto parentPermissionsHandler = FileSystem::FilePermissionsRestore{parentFolderPath, FileSystem::FolderPermissions::ReadWrite};
+        if (cancelled()) {
+            return false;
+        }
         FileSystem::setFolderPermissions(path, FileSystem::FolderPermissions::ReadWrite);
+        if (cancelled()) {
+            return false;
+        }
         auto folderDeleteError = QString{};
 
         try {

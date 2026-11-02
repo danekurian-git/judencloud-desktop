@@ -39,10 +39,20 @@ class QJsonDocument;
  * only works when directly called from a QTest :-(
  */
 
+inline QUrl fakeDavUrl(const QString &relativePath)
+{
+    auto base = OCC::Account::enforcedServerUrl();
+    if (base.isEmpty()) {
+        base = QUrl(QStringLiteral("owncloud://somehost/owncloud"));
+    }
+    base = base.adjusted(QUrl::StripTrailingSlash);
+    base.setPath(base.path() + relativePath);
+    return base;
+}
 
-static const QUrl sRootUrl("owncloud://somehost/owncloud/remote.php/dav/");
-static const QUrl sRootUrl2("owncloud://somehost/owncloud/remote.php/dav/files/admin/");
-static const QUrl sUploadUrl("owncloud://somehost/owncloud/remote.php/dav/uploads/admin/");
+static const QUrl sRootUrl = fakeDavUrl(QStringLiteral("/remote.php/dav/"));
+static const QUrl sRootUrl2 = fakeDavUrl(QStringLiteral("/remote.php/dav/files/admin/"));
+static const QUrl sUploadUrl = fakeDavUrl(QStringLiteral("/remote.php/dav/uploads/admin/"));
 
 inline QString getFilePathFromUrl(const QUrl &url)
 {
@@ -97,15 +107,26 @@ public:
     virtual void mkdir(const QString &relativePath) = 0;
     virtual void rename(const QString &relativePath, const QString &relativeDestinationDirectory) = 0;
     virtual void setModTime(const QString &relativePath, const QDateTime &modTime) = 0;
-    virtual void modifyLockState(const QString &relativePath, LockState lockState, int lockType, const QString &lockOwner, const QString &lockOwnerId, const QString &lockEditorId, quint64 lockTime, quint64 lockTimeout) = 0;
+    virtual void modifyLockState(const QString &relativePath,
+                                 LockState lockState,
+                                 int lockType,
+                                 const QString &lockOwner,
+                                 const QString &lockOwnerId,
+                                 const QString &lockEditorId,
+                                 quint64 lockTime,
+                                 quint64 lockTimeout) = 0;
     virtual void setE2EE(const QString &relativepath, const bool enabled) = 0;
 };
 
 class DiskFileModifier : public FileModifier
 {
     QDir _rootDir;
+
 public:
-    DiskFileModifier(const QString &rootDirPath) : _rootDir(rootDirPath) { }
+    DiskFileModifier(const QString &rootDirPath)
+        : _rootDir(rootDirPath)
+    {
+    }
     void remove(const QString &relativePath) override;
     void insert(const QString &relativePath, qint64 size = 64, char contentChar = 'W') override;
     void setContents(const QString &relativePath, char contentChar) override;
@@ -288,7 +309,11 @@ class FakePropfindReply : public FakeReply
 public:
     QByteArray payload;
 
-    explicit FakePropfindReply(FileInfo &remoteRootFileInfo, QNetworkAccessManager::Operation op, const QNetworkRequest &request, QObject *parent);
+    explicit FakePropfindReply(FileInfo &remoteRootFileInfo,
+                               QNetworkAccessManager::Operation op,
+                               const QNetworkRequest &request,
+                               QObject *parent,
+                               bool mountTypeRequested = false);
     explicit FakePropfindReply(const QByteArray &replyContents, QNetworkAccessManager::Operation op, const QNetworkRequest &request, QObject *parent);
 
     Q_INVOKABLE void respond();

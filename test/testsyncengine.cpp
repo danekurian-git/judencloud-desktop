@@ -14,10 +14,18 @@
 #include "syncenginetestutils.h"
 
 #include "caseclashconflictsolver.h"
+#include "common/utility.h"
 #include "configfile.h"
 #include "propagatorjobs.h"
 #include "syncengine.h"
 #include "syncoptions.h"
+
+#ifdef Q_OS_WIN
+namespace OCC
+{
+OCSYNC_EXPORT extern std::function<Utility::LocalStorageType(const QString &)> localStorageTypeOverride;
+}
+#endif
 
 #include <QFile>
 #include <QtTest>
@@ -114,6 +122,48 @@ private Q_SLOTS:
     {
         QTextCodec::setCodecForLocale(QTextCodec::codecForName("UTF-8"));
     }
+
+#ifdef Q_OS_WIN
+    void testExternalStoragePreventsTransfers()
+    {
+        QScopedValueRollback scope(localStorageTypeOverride);
+        localStorageTypeOverride = [](const QString &) {
+            return Utility::LocalStorageType::Internal;
+        };
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        fakeFolder.localModifier().insert("A/local-only");
+        fakeFolder.remoteModifier().insert("B/remote-only");
+        const auto localBefore = fakeFolder.currentLocalState();
+        const auto remoteBefore = fakeFolder.currentRemoteState();
+        QSignalSpy errors(&fakeFolder.syncEngine(), &SyncEngine::syncError);
+        constexpr auto previousSyncTime = qint64(123456);
+        fakeFolder.syncJournal().keyValueStoreSet(QStringLiteral("last_sync"), previousSyncTime);
+        auto requests = 0;
+        fakeFolder.setServerOverride([&requests](QNetworkAccessManager::Operation, const QNetworkRequest &, QIODevice *) -> QNetworkReply * {
+            ++requests;
+            return nullptr;
+        });
+        for (const auto type : {Utility::LocalStorageType::External, Utility::LocalStorageType::Unknown}) {
+            localStorageTypeOverride = [type](const QString &) {
+                return type;
+            };
+            QVERIFY(!fakeFolder.syncOnce());
+            QCOMPARE(fakeFolder.currentLocalState(), localBefore);
+            QCOMPARE(fakeFolder.currentRemoteState(), remoteBefore);
+            QVERIFY(!fakeFolder.syncEngine().isSyncRunning());
+            QCOMPARE(fakeFolder.syncJournal().keyValueStoreGetInt(QStringLiteral("last_sync"), -1), previousSyncTime);
+            QCOMPARE(requests, 0);
+        }
+        QCOMPARE(errors.count(), 2);
+        localStorageTypeOverride = [](const QString &) {
+            return Utility::LocalStorageType::Internal;
+        };
+        QVERIFY(fakeFolder.syncOnce());
+        QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
+        QVERIFY(requests > 0);
+        QVERIFY(fakeFolder.syncJournal().keyValueStoreGetInt(QStringLiteral("last_sync"), -1) > previousSyncTime);
+    }
+#endif
 
     void testFileDownload() {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
@@ -2063,7 +2113,7 @@ private Q_SLOTS:
         }
     }
 
-    void testExistingFolderBecameBig()
+    void testExistingFolderSizeDoesNotRequireConfirmation()
     {
         constexpr auto testFolder = "folder";
         constexpr auto testSmallFile = "folder/small_file.txt";
@@ -2089,7 +2139,8 @@ private Q_SLOTS:
 
         fakeFolder.remoteModifier().insert(testLargeFile, 256);
         QVERIFY(fakeFolder.syncOnce());
-        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.count(), 0);
+        QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     }
 
     void testFileDownloadWithUnicodeCharacterInName() {

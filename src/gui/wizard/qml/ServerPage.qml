@@ -35,6 +35,7 @@ Item {
         }
 
         EnforcedPlainTextLabel {
+            visible: root.controller.serverUrlEditable
             text: qsTr("Enter the link to your %1 web interface from the browser or the link to a folder shared with you.").arg(root.controller.appName)
             color: root.hintTextColor
             font.pixelSize: Style.pixelSize + 2
@@ -43,6 +44,7 @@ Item {
         }
 
         Item {
+            visible: root.controller.serverUrlEditable || root.controller.overrideServerSelectionRequired
             Layout.fillWidth: true
             Layout.preferredHeight: 60
             Layout.topMargin: 22
@@ -198,6 +200,15 @@ Item {
                     font.pixelSize: Style.pixelSize
                 }
             }
+        }
+
+        WizardButton {
+            visible: !root.controller.serverUrlEditable && !root.controller.overrideServerSelectionRequired
+            enabled: !root.controller.busy
+            primary: true
+            text: qsTr("Sign in")
+            Layout.alignment: Qt.AlignHCenter
+            onClicked: root.controller.submitServerUrl()
         }
 
         EnforcedPlainTextLabel {

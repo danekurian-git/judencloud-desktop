@@ -8,6 +8,8 @@
 
 #include "accountmanager.h"
 #include <QNetworkAccessManager>
+#include <QPointer>
+#include <QTimer>
 
 class QJsonDocument;
 class TestRemoteWipe;
@@ -43,7 +45,7 @@ private Q_SLOTS:
      * If wipe is requested, delete account and data, if not continue by asking
      * the user to login again
      */
-    void slotCheckJob();
+    void slotCheckJob(QNetworkReply *reply);
 
     /**
      * Local sync folders were wiped, this will now remove the account.
@@ -55,16 +57,27 @@ private Q_SLOTS:
      * <server>/index.php/core/wipe/success
      */
     void notifyServerSuccess();
-    void slotNotifyServerSuccessFinished();
+    void slotNotifyServerSuccessFinished(QNetworkReply *reply);
 
 
 private:
     AccountPtr _account;
     QString _appPassword;
     bool _canWipeLocalFiles = false;
+    bool _wipeAuthorized = false;
+    bool _wipeCompleted = false;
+    bool _acknowledged = false;
+    QTimer _checkDeadline;
+    QTimer _successDeadline;
+    QUrl _checkUrl;
+    QString _checkAccountId;
+    QString _checkDavUser;
     QNetworkAccessManager *_networkManager = nullptr;
-    QNetworkReply *_networkReplyCheck = nullptr;
-    QNetworkReply *_networkReplySuccess = nullptr;
+    QPointer<QNetworkReply> _networkReplyCheck;
+    QPointer<QNetworkReply> _networkReplySuccess;
+    [[nodiscard]] AccountStatePtr currentAccountState() const;
+    void cancelCheck();
+    [[nodiscard]] QNetworkReply *postToken(const QString &endpoint);
 
     friend class ::TestRemoteWipe;
 };
