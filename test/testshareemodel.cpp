@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include "accounttestutils.h"
 #include "gui/filedetails/shareemodel.h"
 
 #include <QTest>
@@ -32,8 +33,7 @@ public:
         AccountManager::instance()->deleteAccount(_accountState.data());
     };
 
-    struct FakeShareeDefinition
-    {
+    struct FakeShareeDefinition {
         QString label;
 
         QString shareWith;
@@ -54,7 +54,7 @@ public:
         newShareeJson.insert("value", newShareeValueJson);
 
         QString category;
-        switch(definition.type) {
+        switch (definition.type) {
         case Sharee::Invalid:
             category = QStringLiteral("invalid");
             break;
@@ -118,11 +118,14 @@ public:
                 return shareeShareWith.contains(searchString, Qt::CaseInsensitive);
             });
 
-            std::copy_if(filteredShareesArray.cbegin(), filteredShareesArray.cend(), std::back_inserter(exactMatches), [&searchString](const QJsonValue &shareeValue) {
-                const auto shareeObject = shareeValue.toObject().value("value").toObject();
-                const auto shareeShareWith = shareeObject.value("shareWith").toString();
-                return shareeShareWith == searchString;
-            });
+            std::copy_if(filteredShareesArray.cbegin(),
+                         filteredShareesArray.cend(),
+                         std::back_inserter(exactMatches),
+                         [&searchString](const QJsonValue &shareeValue) {
+                             const auto shareeObject = shareeValue.toObject().value("value").toObject();
+                             const auto shareeShareWith = shareeObject.value("shareWith").toString();
+                             return shareeShareWith == searchString;
+                         });
 
             returnSharees.insert(shareesCategory, filteredShareesArray);
         }
@@ -170,7 +173,6 @@ public:
         _shareesMap.clear();
     }
 
-
 private:
     AccountPtr _account;
     AccountStatePtr _accountState;
@@ -180,33 +182,33 @@ private:
 
     // Some fake sharees of different categories
     // ALL OF THEM CONTAIN AN 'I' !! Important for testing
-    FakeShareeDefinition _michaelUserDefinition {
+    FakeShareeDefinition _michaelUserDefinition{
         QStringLiteral("Michael"),
         QStringLiteral("michael"),
         Sharee::User,
         {},
     };
-    FakeShareeDefinition _liamUserDefinition {
+    FakeShareeDefinition _liamUserDefinition{
         QStringLiteral("Liam"),
         QStringLiteral("liam"),
         Sharee::User,
         {},
     };
-    FakeShareeDefinition _iqbalUserDefinition {
+    FakeShareeDefinition _iqbalUserDefinition{
         QStringLiteral("Iqbal"),
         QStringLiteral("iqbal"),
         Sharee::User,
         {},
     };
 
-    FakeShareeDefinition _universityGroupDefinition {
+    FakeShareeDefinition _universityGroupDefinition{
         QStringLiteral("University"),
         QStringLiteral("university"),
         Sharee::Group,
         {},
     };
 
-    FakeShareeDefinition _testEmailDefinition {
+    FakeShareeDefinition _testEmailDefinition{
         QStringLiteral("test.email@nextcloud.com"),
         QStringLiteral("test.email@nextcloud.com"),
         Sharee::Email,
@@ -239,10 +241,9 @@ private Q_SLOTS:
             const auto reqPath = reqRawPath.startsWith("/owncloud/") ? reqRawPath.mid(10) : reqRawPath;
             qDebug() << req.url() << reqPath << op;
 
-            if(req.url().toString().startsWith(_accountState->account()->url().toString()) &&
-                reqPath == QStringLiteral("ocs/v2.php/apps/files_sharing/api/v1/sharees") &&
-                req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "GET") {
-
+            if (req.url().toString().startsWith(_accountState->account()->url().toString())
+                && reqPath == QStringLiteral("ocs/v2.php/apps/files_sharing/api/v1/sharees")
+                && req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "GET") {
                 const auto urlQuery = QUrlQuery(req.url());
                 const auto searchParam = urlQuery.queryItemValue(QStringLiteral("search"));
                 const auto itemTypeParam = urlQuery.queryItemValue(QStringLiteral("itemType"));
@@ -267,7 +268,7 @@ private Q_SLOTS:
 
         _account = Account::create();
         _account->setCredentials(new FakeCredentials{_fakeQnam.data()});
-        _account->setUrl(QUrl(("owncloud://somehost/owncloud")));
+        AccountTestAccess::setUrl(*_account, QUrl("owncloud://somehost/owncloud"));
         _accountState = new AccountState(_account);
         AccountManager::instance()->addAccount(_account);
 
@@ -314,7 +315,7 @@ private Q_SLOTS:
         QCOMPARE(model.lookupMode(), lookupMode);
 
         const ShareePtr sharee(new Sharee(_testEmailDefinition.shareWith, _testEmailDefinition.label, _testEmailDefinition.type));
-        const QVariantList shareeBlocklist {QVariant::fromValue(sharee)};
+        const QVariantList shareeBlocklist{QVariant::fromValue(sharee)};
         model.setShareeBlocklist(shareeBlocklist);
         QCOMPARE(shareeBlocklistChanged.count(), 1);
         QCOMPARE(model.shareeBlocklist(), shareeBlocklist);
@@ -434,10 +435,8 @@ private Q_SLOTS:
         const auto shareeDisplay = shareeIndex.data(Qt::DisplayRole).toString();
         QCOMPARE(shareeDisplay, expectedShareeDisplay);
 
-        const auto expectedAutoCompleterStringMatch = QString(_testEmailDefinition.label +
-                                                              QStringLiteral(" (") +
-                                                              _testEmailDefinition.shareWith +
-                                                              QStringLiteral(")"));
+        const auto expectedAutoCompleterStringMatch =
+            QString(_testEmailDefinition.label + QStringLiteral(" (") + _testEmailDefinition.shareWith + QStringLiteral(")"));
         const auto autoCompleterStringMatch = shareeIndex.data(ShareeModel::AutoCompleterStringMatchRole).toString();
         QCOMPARE(autoCompleterStringMatch, expectedAutoCompleterStringMatch);
     }
@@ -454,7 +453,7 @@ private Q_SLOTS:
         model.setAccountState(_accountState.data());
 
         const ShareePtr sharee(new Sharee(_testEmailDefinition.shareWith, _testEmailDefinition.label, _testEmailDefinition.type));
-        const QVariantList shareeBlocklist {QVariant::fromValue(sharee)};
+        const QVariantList shareeBlocklist{QVariant::fromValue(sharee)};
         model.setShareeBlocklist(shareeBlocklist);
 
         QSignalSpy shareesReady(&model, &ShareeModel::shareesReady);
@@ -466,7 +465,7 @@ private Q_SLOTS:
         QVERIFY(lastElementType == Sharee::Type::LookupServerSearch);
 
         const ShareePtr shareeTwo(new Sharee(_michaelUserDefinition.shareWith, _michaelUserDefinition.label, _michaelUserDefinition.type));
-        const QVariantList largerShareeBlocklist {QVariant::fromValue(sharee), QVariant::fromValue(shareeTwo)};
+        const QVariantList largerShareeBlocklist{QVariant::fromValue(sharee), QVariant::fromValue(shareeTwo)};
         model.setShareeBlocklist(largerShareeBlocklist);
         QCOMPARE(model.rowCount(), shareesCount(searchString) - 2 + 1);
         lastElementType = model.data(model.index(model.rowCount() - 1), ShareeModel::Roles::TypeRole).toInt();

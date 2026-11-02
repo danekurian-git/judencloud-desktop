@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include "accounttestutils.h"
 #include <QLoggingCategory>
 #include <QSignalSpy>
 #include <QTest>
@@ -32,7 +33,9 @@ FakeWebSocketServer::~FakeWebSocketServer()
     close();
 }
 
-QWebSocket *FakeWebSocketServer::authenticateAccount(const OCC::AccountPtr account, std::function<void(OCC::PushNotifications *pushNotifications)> beforeAuthentication, std::function<void(void)> afterAuthentication)
+QWebSocket *FakeWebSocketServer::authenticateAccount(const OCC::AccountPtr account,
+                                                     std::function<void(OCC::PushNotifications *pushNotifications)> beforeAuthentication,
+                                                     std::function<void(void)> afterAuthentication)
 {
     const auto pushNotifications = account->pushNotifications();
     Q_ASSERT(pushNotifications);
@@ -144,13 +147,10 @@ void FakeWebSocketServer::clearTextMessages()
     _processTextMessageSpy->clear();
 }
 
-OCC::AccountPtr FakeWebSocketServer::createAccount(const QString &username,
-    const QString &password,
-    const QUrl &accountUrl,
-    const QUrl &webSocketUrl)
+OCC::AccountPtr FakeWebSocketServer::createAccount(const QString &username, const QString &password, const QUrl &accountUrl, const QUrl &webSocketUrl)
 {
     auto account = OCC::Account::create();
-    account->setUrl(accountUrl);
+    AccountTestAccess::setUrl(*account, accountUrl);
 
     QStringList typeList;
     typeList.append("files");
@@ -211,15 +211,23 @@ void CredentialsStub::fetchFromKeychain(const QString &appName)
     Q_UNUSED(appName)
 }
 
-void CredentialsStub::askFromUser() { }
+void CredentialsStub::askFromUser()
+{
+}
 
 bool CredentialsStub::stillValid(QNetworkReply * /*reply*/)
 {
     return false;
 }
 
-void CredentialsStub::persist() { }
+void CredentialsStub::persist()
+{
+}
 
-void CredentialsStub::invalidateToken() { }
+void CredentialsStub::invalidateToken()
+{
+}
 
-void CredentialsStub::forgetSensitiveData() { }
+void CredentialsStub::forgetSensitiveData()
+{
+}

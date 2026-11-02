@@ -6,6 +6,7 @@
 #include "gui/search/unifiedsearchpeoplemodel.h"
 
 #include "account.h"
+#include "accounttestutils.h"
 #include "accountstate.h"
 #include "syncenginetestutils.h"
 #include "testhelper.h"
@@ -20,8 +21,10 @@
 
 #include <memory>
 
-namespace {
-const auto response = QByteArrayLiteral(R"({"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":{"exact":{"users":[{"label":"Ada Lovelace","value":{"shareWith":"ada","shareType":0}}]},"users":[{"label":"Ada duplicate","value":{"shareWith":"ada","shareType":0}},{"label":"Alan Turing","value":{"shareWith":"alan","shareType":0}}]}}})");
+namespace
+{
+const auto response = QByteArrayLiteral(
+    R"({"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":{"exact":{"users":[{"label":"Ada Lovelace","value":{"shareWith":"ada","shareType":0}}]},"users":[{"label":"Ada duplicate","value":{"shareWith":"ada","shareType":0}},{"label":"Alan Turing","value":{"shareWith":"alan","shareType":0}}]}}})");
 const auto errorResponse = QByteArrayLiteral(R"({"ocs":{"meta":{"status":"failure","statuscode":500,"message":"Failure"},"data":{}}})");
 }
 
@@ -41,7 +44,7 @@ private Q_SLOTS:
         auto qnam = std::unique_ptr<FakeQNAM>(new FakeQNAM({}));
         auto account = OCC::Account::create();
         account->setCredentials(new FakeCredentials(qnam.get()));
-        account->setUrl(QUrl(QStringLiteral("https://cloud.example.test/nextcloud")));
+        AccountTestAccess::setUrl(*account, QUrl(QStringLiteral("https://cloud.example.test/nextcloud")));
         account->setDavUser(QStringLiteral("current-user"));
         auto state = std::make_unique<FakeAccountState>(account);
         auto requestCount = 0;
@@ -67,7 +70,7 @@ private Q_SLOTS:
         auto qnam = std::unique_ptr<FakeQNAM>(new FakeQNAM({}));
         auto account = OCC::Account::create();
         account->setCredentials(new FakeCredentials(qnam.get()));
-        account->setUrl(QUrl(QStringLiteral("https://cloud.example.test/")));
+        AccountTestAccess::setUrl(*account, QUrl(QStringLiteral("https://cloud.example.test/")));
         account->setDavUser(QStringLiteral("me"));
         auto state = std::make_unique<FakeAccountState>(account);
         QUrl requestedUrl;
@@ -100,11 +103,15 @@ private Q_SLOTS:
         auto qnam = std::unique_ptr<FakeQNAM>(new FakeQNAM({}));
         auto account = OCC::Account::create();
         account->setCredentials(new FakeCredentials(qnam.get()));
-        account->setUrl(QUrl(QStringLiteral("https://cloud.example.test/")));
+        AccountTestAccess::setUrl(*account, QUrl(QStringLiteral("https://cloud.example.test/")));
         account->setDavUser(QStringLiteral("current-user"));
         auto state = std::make_unique<FakeAccountState>(account);
         qnam->setOverride([&](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) {
-            return static_cast<QNetworkReply *>(new FakePayloadReply(operation, request, QByteArrayLiteral(R"({"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":{"exact":{"users":[]},"users":[]}}})"), qnam.get()));
+            return static_cast<QNetworkReply *>(new FakePayloadReply(
+                operation,
+                request,
+                QByteArrayLiteral(R"({"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":{"exact":{"users":[]},"users":[]}}})"),
+                qnam.get()));
         });
         OCC::UnifiedSearchPeopleModel model(nullptr, 0);
         model.setAccountState(state.get());
@@ -118,7 +125,7 @@ private Q_SLOTS:
         auto qnam = std::unique_ptr<FakeQNAM>(new FakeQNAM({}));
         auto account = OCC::Account::create();
         account->setCredentials(new FakeCredentials(qnam.get()));
-        account->setUrl(QUrl(QStringLiteral("https://cloud.example.test/")));
+        AccountTestAccess::setUrl(*account, QUrl(QStringLiteral("https://cloud.example.test/")));
         account->setDavUser(QStringLiteral("me"));
         auto state = std::make_unique<FakeAccountState>(account);
         qnam->setOverride([&](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) {
@@ -146,7 +153,7 @@ private Q_SLOTS:
         auto qnam = std::unique_ptr<FakeQNAM>(new FakeQNAM({}));
         auto account = OCC::Account::create();
         account->setCredentials(new FakeCredentials(qnam.get()));
-        account->setUrl(QUrl(QStringLiteral("https://cloud.example.test/")));
+        AccountTestAccess::setUrl(*account, QUrl(QStringLiteral("https://cloud.example.test/")));
         account->setDavUser(QStringLiteral("current-user"));
         auto state = std::make_unique<FakeAccountState>(account);
 
@@ -171,7 +178,7 @@ private Q_SLOTS:
         auto qnam = std::unique_ptr<FakeQNAM>(new FakeQNAM({}));
         auto account = OCC::Account::create();
         account->setCredentials(new FakeCredentials(qnam.get()));
-        account->setUrl(QUrl(QStringLiteral("https://cloud.example.test/")));
+        AccountTestAccess::setUrl(*account, QUrl(QStringLiteral("https://cloud.example.test/")));
         auto state = std::make_unique<FakeAccountState>(account);
 
         auto users = QJsonArray();
@@ -182,14 +189,17 @@ private Q_SLOTS:
             });
         }
         const auto oversizedResponse = QJsonDocument(QJsonObject{
-            {QStringLiteral("ocs"), QJsonObject{
-                {QStringLiteral("meta"), QJsonObject{{QStringLiteral("statuscode"), 200}}},
-                {QStringLiteral("data"), QJsonObject{
-                    {QStringLiteral("exact"), QJsonObject{{QStringLiteral("users"), QJsonArray()}}},
-                    {QStringLiteral("users"), users},
-                }},
-            }},
-        }).toJson(QJsonDocument::Compact);
+                                                         {QStringLiteral("ocs"),
+                                                          QJsonObject{
+                                                              {QStringLiteral("meta"), QJsonObject{{QStringLiteral("statuscode"), 200}}},
+                                                              {QStringLiteral("data"),
+                                                               QJsonObject{
+                                                                   {QStringLiteral("exact"), QJsonObject{{QStringLiteral("users"), QJsonArray()}}},
+                                                                   {QStringLiteral("users"), users},
+                                                               }},
+                                                          }},
+                                                     })
+                                           .toJson(QJsonDocument::Compact);
         qnam->setOverride([&](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) {
             return static_cast<QNetworkReply *>(new FakePayloadReply(operation, request, oversizedResponse, qnam.get()));
         });

@@ -41,6 +41,7 @@
 #include <memory>
 
 class TestAccount;
+class AccountTestAccess;
 
 class QSettings;
 class QNetworkReply;
@@ -626,6 +627,7 @@ private:
 
     friend class AccountManager;
     friend class ::TestAccount;
+    friend class ::AccountTestAccess;
 
     // Direct Editing
     QString _lastDirectEditingETag;

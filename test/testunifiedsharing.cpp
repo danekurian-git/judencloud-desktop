@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include "accounttestutils.h"
 #include <QMetaMethod>
 #include <QSignalSpy>
 #include <QTest>
@@ -49,20 +50,20 @@ class TestUnifiedSharing : public QObject
 {
     Q_OBJECT
 
-  private Q_SLOTS:
-      void typedJobSignalsExposeJsonMetatypes()
-      {
-          const auto jsonType = QMetaType::fromType<QJsonDocument>();
-          QVERIFY(jsonType.isValid());
+private Q_SLOTS:
+    void typedJobSignalsExposeJsonMetatypes()
+    {
+        const auto jsonType = QMetaType::fromType<QJsonDocument>();
+        QVERIFY(jsonType.isValid());
 
-          const auto shareCreated = QMetaMethod::fromSignal(&CreateShareJob::shareCreated);
-          const auto sharesFetched = QMetaMethod::fromSignal(&GetSharesJob::sharesFetched);
-          const auto shareUpdated = QMetaMethod::fromSignal(&UpdateShareJob::shareUpdated);
+        const auto shareCreated = QMetaMethod::fromSignal(&CreateShareJob::shareCreated);
+        const auto sharesFetched = QMetaMethod::fromSignal(&GetSharesJob::sharesFetched);
+        const auto shareUpdated = QMetaMethod::fromSignal(&UpdateShareJob::shareUpdated);
 
-          QCOMPARE(shareCreated.parameterMetaType(0).id(), jsonType.id());
-          QCOMPARE(sharesFetched.parameterMetaType(0).id(), jsonType.id());
-          QCOMPARE(shareUpdated.parameterMetaType(0).id(), jsonType.id());
-      }
+        QCOMPARE(shareCreated.parameterMetaType(0).id(), jsonType.id());
+        QCOMPARE(sharesFetched.parameterMetaType(0).id(), jsonType.id());
+        QCOMPARE(shareUpdated.parameterMetaType(0).id(), jsonType.id());
+    }
 
     void recipientsPreserveServerIdentityAndCapabilities()
     {
@@ -354,7 +355,6 @@ class TestUnifiedSharing : public QObject
         QCOMPARE(model.data(enumIndex, PropertyModel::TypeRole).toInt(), static_cast<int>(PropertyModel::Enum));
         QCOMPARE(model.data(enumIndex, PropertyModel::AdvancedRole).toBool(), true);
         QCOMPARE(model.data(enumIndex, PropertyModel::ValidValuesRole).toStringList(), QStringList({"private"_L1, "public"_L1}));
-
     }
 
     void permissionModelIsReadOnlyAndTracksOnlyItsCurrentShare()
@@ -394,7 +394,6 @@ class TestUnifiedSharing : public QObject
             "ocs": {"data": {"permissions": []}}
         })json"));
         QCOMPARE(model.rowCount(), 2);
-
     }
 
     void requestsAreConfiguredBeforeTheyStart()
@@ -573,7 +572,10 @@ class TestUnifiedSharing : public QObject
                       {},
                       {{"class"_L1, "recipient-class"_L1}, {"value"_L1, "alice"_L1}});
         verifyRequest(new GetShareJob{account, "share-1"_L1}, "POST", "/ocs/v2.php/apps/sharing/api/v1/share/share-1");
-        verifyRequest(new UnifiedSharingRequest{account, "/ocs/v2.php/apps/sharing/api/v1/share/share-1"_L1, "POST"_ba, {.parameters = {}, .passStatusCodes = {}, .body = QJsonObject{}}},
+        verifyRequest(new UnifiedSharingRequest{account,
+                                                "/ocs/v2.php/apps/sharing/api/v1/share/share-1"_L1,
+                                                "POST"_ba,
+                                                {.parameters = {}, .passStatusCodes = {}, .body = QJsonObject{}}},
                       "POST",
                       "/ocs/v2.php/apps/sharing/api/v1/share/share-1");
         QCOMPARE(requestContentType, "application/json");
@@ -1033,7 +1035,8 @@ class TestUnifiedSharing : public QObject
 
             const auto creating = path.endsWith("/api/v1/share"_L1);
             const auto addingRecipient = path.endsWith("/recipient"_L1);
-            const auto response = QString{R"json({
+            const auto response =
+                QString{R"json({
                 "ocs": {
                     "meta": {
                         "status": "ok",
@@ -1047,11 +1050,9 @@ class TestUnifiedSharing : public QObject
                     }
                 }
             })json"}
-                                      .arg(creating ? 201 : 200)
-                                      .arg(addingRecipient
-                                               ? R"json([{"class":"user","display_name":"Alice","value":"alice","instance":"cloud.example.com"}])json"_L1
-                                               : "[]"_L1)
-                                      .toUtf8();
+                    .arg(creating ? 201 : 200)
+                    .arg(addingRecipient ? R"json([{"class":"user","display_name":"Alice","value":"alice","instance":"cloud.example.com"}])json"_L1 : "[]"_L1)
+                    .toUtf8();
             return new FakePayloadReply{operation, request, response, this};
         });
 
@@ -1082,8 +1083,7 @@ class TestUnifiedSharing : public QObject
         QCOMPARE(requestVerbs, (QList<QByteArray>{"POST", "POST", "POST"}));
         QCOMPARE(requestBodies.at(0), QJsonObject{});
         QCOMPARE(requestBodies.at(1), (QJsonObject{{"class"_L1, SourceTypeClasses::node}, {"value"_L1, "42"_L1}}));
-        QCOMPARE(requestBodies.at(2),
-                 (QJsonObject{{"class"_L1, "user"_L1}, {"value"_L1, "alice"_L1}, {"instance"_L1, "cloud.example.com"_L1}}));
+        QCOMPARE(requestBodies.at(2), (QJsonObject{{"class"_L1, "user"_L1}, {"value"_L1, "alice"_L1}, {"instance"_L1, "cloud.example.com"_L1}}));
     }
 
     void sharingControllerCreatesAndActivatesPublicLink()
@@ -1136,15 +1136,14 @@ class TestUnifiedSharing : public QObject
             })json"}
                                       .arg(creating ? 201 : 200)
                                       .arg(activating ? "active"_L1 : "draft"_L1)
-                                      .arg(hasRecipient
-                                               ? QString{R"json([{
+                                      .arg(hasRecipient ? QString{R"json([{
                                                    "class": "OC\\Core\\Sharing\\Recipient\\TokenShareRecipientType",
                                                    "display_name": "Public link",
                                                    "value": "%1",
                                                    "secret": {"updatable": true, "url": "%2"}
                                                }])json"}
-                                                     .arg(generatedRecipientValue, publicUrl)
-                                               : "[]"_L1)
+                                                              .arg(generatedRecipientValue, publicUrl)
+                                                        : "[]"_L1)
                                       .toUtf8();
             return new FakePayloadReply{operation, request, response, this};
         });
@@ -1173,8 +1172,7 @@ class TestUnifiedSharing : public QObject
                     != UnifiedShareListModel::ItemType::CreatePublicLink);
         }
 
-        QCOMPARE(recipientBody,
-                 (QJsonObject{{"class"_L1, RecipientTypeClasses::token}, {"value"_L1, generatedRecipientValue}}));
+        QCOMPARE(recipientBody, (QJsonObject{{"class"_L1, RecipientTypeClasses::token}, {"value"_L1, generatedRecipientValue}}));
         QCOMPARE(requestPaths.size(), 5);
         QVERIFY(requestPaths.at(0).endsWith("/api/v1/secret"_L1));
         QVERIFY(requestPaths.at(1).endsWith("/api/v1/share"_L1));
@@ -1217,7 +1215,7 @@ class TestUnifiedSharing : public QObject
     void sharingControllerGeneratesInternalLinksWithoutNetwork()
     {
         FakeFolder fakeFolder{{}, {}, {}, false};
-        fakeFolder.account()->setUrl(QUrl{u"https://example.com/nextcloud"_s});
+        AccountTestAccess::setUrl(*fakeFolder.account(), QUrl{u"https://example.com/nextcloud"_s});
         auto requestCount = 0;
         fakeFolder.setServerOverride([&](FakeQNAM::Operation, const QNetworkRequest &, QIODevice *) -> QNetworkReply * {
             ++requestCount;
@@ -2209,7 +2207,6 @@ class TestUnifiedSharing : public QObject
             QCOMPARE(share->id(), "share-1"_L1);
             QCOMPARE(share->state(), Share::State::Draft);
         }
-
     }
 
     void networkErrorsAreSeparateFromSuccessfulResults()

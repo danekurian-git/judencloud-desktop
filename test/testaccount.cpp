@@ -8,6 +8,7 @@
  * any purpose.
  */
 
+#include "accounttestutils.h"
 #include <qglobal.h>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -74,7 +75,7 @@ private Q_SLOTS:
         QFETCH(QString, expectedUrl);
         const auto account = Account::create();
         // This fixture exercises URL formatting independently of server admission.
-        account->_url = QUrl{baseUrl};
+        AccountTestAccess::setUrl(*account, QUrl{baseUrl});
         account->setCapabilities(capabilities);
         QCOMPARE(account->internalLinkUrl(fileId).toString(QUrl::FullyEncoded), expectedUrl);
     }
@@ -340,7 +341,13 @@ private Q_SLOTS:
         QFETCH(bool, expectedResult);
         QFETCH(QString, expectedDavUser);
 
-        account->setUrl(QUrl{url});
+        if (!Account::enforcedServerUrl().isEmpty()) {
+            QVERIFY(!account->setUrl(QUrl{url}));
+            QVERIFY(!account->isPublicShareLink());
+            QVERIFY(account->davUser().isEmpty());
+            return;
+        }
+        QVERIFY(account->setUrl(QUrl{url}));
         QCOMPARE(account->isPublicShareLink(), expectedResult);
         QCOMPARE(account->davUser(), expectedDavUser);
     }

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include "accounttestutils.h"
 #include "sharetestutils.h"
 
 #include "testhelper.h"
@@ -20,19 +21,16 @@ FakeShareDefinition::FakeShareDefinition(ShareTestHelper *helper,
     ++helper->latestShareId;
     const auto idString = QString::number(helper->latestShareId);
 
-
     fileDefinition = helper->fakeFileDefinition;
     shareId = idString;
     shareCanDelete = true;
     shareCanEdit = true;
-    shareUidOwner = helper->account->davUser();;
+    shareUidOwner = helper->account->davUser();
+    ;
     shareDisplayNameOwner = helper->account->davDisplayName();
     sharePassword = password;
-    sharePermissions = static_cast<int>(SharePermissions(SharePermissionRead |
-                                                         SharePermissionUpdate |
-                                                         SharePermissionCreate |
-                                                         SharePermissionDelete |
-                                                         SharePermissionShare));
+    sharePermissions =
+        static_cast<int>(SharePermissions(SharePermissionRead | SharePermissionUpdate | SharePermissionCreate | SharePermissionDelete | SharePermissionShare));
     shareNote = note;
     shareHideDownload = 0;
     shareExpiration = expiration;
@@ -125,7 +123,7 @@ void ShareTestHelper::setup()
 
     account = Account::create();
     account->setCredentials(new FakeCredentials{_fakeQnam.data()});
-    account->setUrl(QUrl(("owncloud://somehost/owncloud")));
+    AccountTestAccess::setUrl(*account, QUrl("owncloud://somehost/owncloud"));
     account->setCapabilities(_fakeCapabilities);
     accountState = new AccountState(account);
     AccountManager::instance()->addAccount(account);
@@ -151,39 +149,47 @@ void ShareTestHelper::setup()
     QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
     QVERIFY(fakeFileInfo->permissions.CanReshare);
 
-    _fakeCapabilities = QVariantMap {
-        {QStringLiteral("files_sharing"), QVariantMap {
-            {QStringLiteral("api_enabled"), true},
-            {QStringLiteral("default_permissions"), 19},
-            {QStringLiteral("public"), QVariantMap {
-                {QStringLiteral("enabled"), true},
-                {QStringLiteral("expire_date"), QVariantMap {
-                    {QStringLiteral("days"), 30},
-                    {QStringLiteral("enforced"), false},
-                }},
-                {QStringLiteral("expire_date_internal"), QVariantMap {
-                     {QStringLiteral("days"), 30},
-                     {QStringLiteral("enforced"), false},
-                }},
-                {QStringLiteral("expire_date_remote"), QVariantMap {
-                     {QStringLiteral("days"), 30},
-                     {QStringLiteral("enforced"), false},
-                }},
-                {QStringLiteral("password"), QVariantMap {
-                    {QStringLiteral("enforced"), false},
-                }},
-            }},
-            {QStringLiteral("sharebymail"), QVariantMap {
-                {QStringLiteral("enabled"), true},
-                {QStringLiteral("password"), QVariantMap {
-                    {QStringLiteral("enforced"), false},
-                }},
-            }},
-        }},
+    _fakeCapabilities = QVariantMap{
+        {QStringLiteral("files_sharing"),
+         QVariantMap{
+             {QStringLiteral("api_enabled"), true},
+             {QStringLiteral("default_permissions"), 19},
+             {QStringLiteral("public"),
+              QVariantMap{
+                  {QStringLiteral("enabled"), true},
+                  {QStringLiteral("expire_date"),
+                   QVariantMap{
+                       {QStringLiteral("days"), 30},
+                       {QStringLiteral("enforced"), false},
+                   }},
+                  {QStringLiteral("expire_date_internal"),
+                   QVariantMap{
+                       {QStringLiteral("days"), 30},
+                       {QStringLiteral("enforced"), false},
+                   }},
+                  {QStringLiteral("expire_date_remote"),
+                   QVariantMap{
+                       {QStringLiteral("days"), 30},
+                       {QStringLiteral("enforced"), false},
+                   }},
+                  {QStringLiteral("password"),
+                   QVariantMap{
+                       {QStringLiteral("enforced"), false},
+                   }},
+              }},
+             {QStringLiteral("sharebymail"),
+              QVariantMap{
+                  {QStringLiteral("enabled"), true},
+                  {QStringLiteral("password"),
+                   QVariantMap{
+                       {QStringLiteral("enforced"), false},
+                   }},
+              }},
+         }},
     };
 
-   // Generate test data
-   // Properties that apply to the file generally
+    // Generate test data
+    // Properties that apply to the file generally
     const auto fileOwnerUid = account->davUser();
     const auto fileOwnerDisplayName = account->davDisplayName();
     const auto fileTarget = QString(QStringLiteral("/") + fakeFileInfo->name);
@@ -199,7 +205,7 @@ void ShareTestHelper::setup()
     const auto fileStorage = 3;
     const auto fileStorageId = QString(QStringLiteral("home::") + account->davUser());
 
-    fakeFileDefinition = FakeFileReplyDefinition {
+    fakeFileDefinition = FakeFileReplyDefinition{
         fileOwnerUid,
         fileOwnerDisplayName,
         fileTarget,
@@ -230,23 +236,21 @@ QNetworkReply *ShareTestHelper::qnamOverride(QNetworkAccessManager::Operation op
 
     // Properly formatted PROPFIND URL goes something like:
     // https://cloud.nextcloud.com/remote.php/dav/files/claudio/Readme.md
-    if(reqPath.endsWith(testFileName) && req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "PROPFIND") {
-
+    if (reqPath.endsWith(testFileName) && req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "PROPFIND") {
         reply = new FakePropfindReply(fakeFolder.remoteModifier(), op, req, this);
 
-    } else if (req.url().toString().startsWith(accountState->account()->url().toString()) &&
-               reqPath.startsWith(QStringLiteral("ocs/v2.php/apps/files_sharing/api/v1/shares"))) {
-
+    } else if (req.url().toString().startsWith(accountState->account()->url().toString())
+               && reqPath.startsWith(QStringLiteral("ocs/v2.php/apps/files_sharing/api/v1/shares"))) {
         if (op == QNetworkAccessManager::PostOperation) {
             reply = handleSharePostOperation(op, req, device);
 
-        } else if(req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "DELETE") {
+        } else if (req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "DELETE") {
             reply = handleShareDeleteOperation(op, req, reqPath);
 
-        } else if(op == QNetworkAccessManager::PutOperation) {
+        } else if (op == QNetworkAccessManager::PutOperation) {
             reply = handleSharePutOperation(op, req, reqPath, device);
 
-        } else if(req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "GET") {
+        } else if (req.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "GET") {
             reply = handleShareGetOperation(op, req, reqPath);
         }
     } else {
@@ -278,7 +282,7 @@ QNetworkReply *ShareTestHelper::handleSharePostOperation(QNetworkAccessManager::
         QString requestName;
         QString requestPassword;
 
-        for(const auto &data : requestData) {
+        for (const auto &data : requestData) {
             const auto requestDataUrl = QUrl::fromPercentEncoding(data);
             const QString requestDataUrlString(requestDataUrl);
 
@@ -294,10 +298,9 @@ QNetworkReply *ShareTestHelper::handleSharePostOperation(QNetworkAccessManager::
             }
         }
 
-        if (requestPassword.isEmpty() &&
-            ((requestShareType == Share::TypeEmail && account->capabilities().shareEmailPasswordEnforced()) ||
-             (requestShareType == Share::TypeLink && account->capabilities().sharePublicLinkEnforcePassword()))) {
-
+        if (requestPassword.isEmpty()
+            && ((requestShareType == Share::TypeEmail && account->capabilities().shareEmailPasswordEnforced())
+                || (requestShareType == Share::TypeLink && account->capabilities().sharePublicLinkEnforcePassword()))) {
             reply = new FakePayloadReply(op, req, _fake403Response, searchResultsReplyDelay, _fakeQnam.data());
 
         } else if (requestShareType >= 0) {
@@ -309,7 +312,8 @@ QNetworkReply *ShareTestHelper::handleSharePostOperation(QNetworkAccessManager::
     return reply;
 }
 
-QNetworkReply *ShareTestHelper::handleSharePutOperation(const QNetworkAccessManager::Operation op, const QNetworkRequest &req, const QString &reqPath, QIODevice *device)
+QNetworkReply *
+ShareTestHelper::handleSharePutOperation(const QNetworkAccessManager::Operation op, const QNetworkRequest &req, const QString &reqPath, QIODevice *device)
 {
     QNetworkReply *reply = nullptr;
 
@@ -341,7 +345,7 @@ QNetworkReply *ShareTestHelper::handleSharePutOperation(const QNetworkAccessMana
                 auto requestKey = requestSplit.first();
                 auto requestValue = requestSplit.last();
 
-                     // We send expireDate without time but the server returns with time at 23:59:59
+                // We send expireDate without time but the server returns with time at 23:59:59
                 if (requestKey == "expireDate") {
                     requestKey = "expiration";
                     requestValue.append(" 23:59:59");
@@ -357,7 +361,6 @@ QNetworkReply *ShareTestHelper::handleSharePutOperation(const QNetworkAccessMana
 
     return reply;
 }
-
 
 QNetworkReply *ShareTestHelper::handleShareDeleteOperation(const QNetworkAccessManager::Operation op, const QNetworkRequest &req, const QString &reqPath)
 {
@@ -410,11 +413,7 @@ QNetworkReply *ShareTestHelper::handleShareGetOperation(const QNetworkAccessMana
 const QByteArray ShareTestHelper::createNewShare(const Share::ShareType shareType, const QString &shareWith, const QString &password)
 {
     const auto displayString = shareType == Share::TypeLink ? QString() : shareWith;
-    const FakeShareDefinition newShareDefinition(this,
-                                                 shareType,
-                                                 shareWith,
-                                                 displayString,
-                                                 password);
+    const FakeShareDefinition newShareDefinition(this, shareType, shareWith, displayString, password);
 
     _sharesReplyData.append(newShareDefinition.toShareJsonObject());
     return newShareDefinition.toRequestReply();

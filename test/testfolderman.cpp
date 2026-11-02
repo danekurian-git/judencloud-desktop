@@ -8,6 +8,7 @@
  * any purpose.
  */
 
+#include "accounttestutils.h"
 #include <QDesktopServices>
 #include <QScopeGuard>
 #include <QTemporaryDir>
@@ -379,7 +380,7 @@ private Q_SLOTS:
             _fm->unloadAndDeleteAllFolders();
         });
         const auto account = fakeFolder.account();
-        account->setUrl(QUrl{u"https://example.com/nextcloud"_s});
+        AccountTestAccess::setUrl(*account, QUrl{u"https://example.com/nextcloud"_s});
         const auto folder = _fm->addFolder(&fakeFolder.accountState(), folderDefinition(fakeFolder.localPath()));
         QVERIFY(folder);
         folder->setSyncPaused(true);

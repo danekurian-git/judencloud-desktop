@@ -7,6 +7,7 @@
  * any purpose.
  */
 
+#include "accounttestutils.h"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QScopeGuard>
@@ -229,7 +230,7 @@ private Q_SLOTS:
     {
         const auto createAccount = [](const QString &url, const QString &displayName) -> AccountState * {
             auto account = Account::create();
-            account->setUrl(QUrl(url));
+            AccountTestAccess::setUrl(*account, QUrl(url));
             account->setDavDisplayName(displayName);
             return AccountManager::instance()->addAccount(account);
         };

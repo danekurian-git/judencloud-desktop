@@ -42,8 +42,9 @@ static void partialUpload(FakeFolder &fakeFolder, const QString &name, qint64 si
 
     QCOMPARE(fakeFolder.uploadState().children.count(), 1); // the transfer was done with chunking
     auto upStateChildren = fakeFolder.uploadState().children.first().children;
-    QCOMPARE(sizeWhenAbort, std::accumulate(upStateChildren.cbegin(), upStateChildren.cend(), 0,
-                                            [](int s, const FileInfo &i) { return s + i.size; }));
+    QCOMPARE(sizeWhenAbort, std::accumulate(upStateChildren.cbegin(), upStateChildren.cend(), 0, [](int s, const FileInfo &i) {
+                 return s + i.size;
+             }));
 }
 
 // Reduce max chunk size a bit so we get more chunks
@@ -110,7 +111,7 @@ private Q_SLOTS:
     void testFileUpload()
     {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
         const int size = 10 * 1000 * 1000; // 10 MB
 
@@ -130,7 +131,7 @@ private Q_SLOTS:
     void testDestinationHeaderPercentEncoding()
     {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
         QByteArray destinationHeader;
@@ -151,13 +152,14 @@ private Q_SLOTS:
         QVERIFY(destinationHeader.contains("SQ-0.5%25BF-150"));
         QVERIFY(destinationHeader.contains("/A/SQ-0.5%25BF-150/"));
         QVERIFY(!destinationHeader.contains("%2F"));
-        QVERIFY(destinationHeader.startsWith("http://"));
+        QCOMPARE(QUrl::fromEncoded(destinationHeader).scheme(), fakeFolder.account()->url().scheme());
     }
 
     // Test resuming when there's a confusing chunk added
-    void testResume1() {
+    void testResume1()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 10 * 1000 * 1000; // 10 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
@@ -165,7 +167,9 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.uploadState().children.count(), 1);
         auto chunkingId = fakeFolder.uploadState().children.first().name;
         const auto &chunkMap = fakeFolder.uploadState().children.first().children;
-        qint64 uploadedSize = std::accumulate(chunkMap.begin(), chunkMap.end(), 0LL, [](qint64 s, const FileInfo &f) { return s + f.size; });
+        qint64 uploadedSize = std::accumulate(chunkMap.begin(), chunkMap.end(), 0LL, [](qint64 s, const FileInfo &f) {
+            return s + f.size;
+        });
         QVERIFY(uploadedSize > 2 * 1000 * 1000); // at least 2 MB
 
         // Add a fake chunk to make sure it gets deleted
@@ -191,16 +195,19 @@ private Q_SLOTS:
     }
 
     // Test resuming when one of the uploaded chunks got removed
-    void testResume2() {
+    void testResume2()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
         const int size = 30 * 1000 * 1000; // 30 MB
         partialUpload(fakeFolder, "A/a0", size);
         QCOMPARE(fakeFolder.uploadState().children.count(), 1);
         auto chunkingId = fakeFolder.uploadState().children.first().name;
         const auto &chunkMap = fakeFolder.uploadState().children.first().children;
-        qint64 uploadedSize = std::accumulate(chunkMap.begin(), chunkMap.end(), 0LL, [](qint64 s, const FileInfo &f) { return s + f.size; });
+        qint64 uploadedSize = std::accumulate(chunkMap.begin(), chunkMap.end(), 0LL, [](qint64 s, const FileInfo &f) {
+            return s + f.size;
+        });
         QVERIFY(uploadedSize > 2 * 1000 * 1000); // at least 50 MB
         QVERIFY(chunkMap.size() >= 3); // at least three chunks
 
@@ -210,7 +217,7 @@ private Q_SLOTS:
         auto firstChunk = chunkMap.first();
         auto secondChunk = *(std::next(chunkMap.begin()));
         const auto chunksList = chunkMap.keys().mid(2);
-        for (const auto& name : chunksList) {
+        for (const auto &name : chunksList) {
             chunksToDelete.append(name);
         }
         fakeFolder.uploadState().children.first().remove(secondChunk.name);
@@ -228,9 +235,9 @@ private Q_SLOTS:
 
         QVERIFY(fakeFolder.syncOnce());
 
-        for (const auto& toDelete : chunksToDelete) {
+        for (const auto &toDelete : chunksToDelete) {
             bool wasDeleted = false;
-            for (const auto& deleted : deletedPaths) {
+            for (const auto &deleted : deletedPaths) {
                 if (deleted.mid(deleted.lastIndexOf('/') + 1) == toDelete) {
                     wasDeleted = true;
                     break;
@@ -247,9 +254,10 @@ private Q_SLOTS:
     }
 
     // Test resuming when all chunks are already present
-    void testResume3() {
+    void testResume3()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 30 * 1000 * 1000; // 30 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
@@ -257,7 +265,9 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.uploadState().children.count(), 1);
         auto chunkingId = fakeFolder.uploadState().children.first().name;
         const auto &chunkMap = fakeFolder.uploadState().children.first().children;
-        qint64 uploadedSize = std::accumulate(chunkMap.begin(), chunkMap.end(), 0LL, [](qint64 s, const FileInfo &f) { return s + f.size; });
+        qint64 uploadedSize = std::accumulate(chunkMap.begin(), chunkMap.end(), 0LL, [](qint64 s, const FileInfo &f) {
+            return s + f.size;
+        });
         QVERIFY(uploadedSize > 5 * 1000 * 1000); // at least 5 MB
 
         // Add a chunk that makes the file completely uploaded
@@ -294,9 +304,10 @@ private Q_SLOTS:
 
     // Test resuming (or rather not resuming!) for the error case of the sum of
     // chunk sizes being larger than the file size
-    void testResume4() {
+    void testResume4()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
 
         constexpr auto size = 30 * 1000 * 1000; // 30 MB
         constexpr auto chunkSize = 5 * 1000 * 1000; // 5 MB
@@ -332,8 +343,9 @@ private Q_SLOTS:
     // the final MOVE takes longer than the abort-delay
     void testLateAbortHard()
     {
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ { "chunking", "1.0" } } }, { "checksums", QVariantMap{ { "supportedTypes", QStringList() << "SHA1" } } } });
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        fakeFolder.syncEngine().account()->setCapabilities(
+            {{"dav", QVariantMap{{"chunking", "1.0"}}}, {"checksums", QVariantMap{{"supportedTypes", QStringList() << "SHA1"}}}});
         const int size = 15 * 1000 * 1000; // 15 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
@@ -344,7 +356,9 @@ private Q_SLOTS:
         int responseDelay = 100000; // bigger than abort-wait timeout
         fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
             if (request.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "MOVE") {
-                QTimer::singleShot(50, &parent, [&]() { fakeFolder.syncEngine().abort(); });
+                QTimer::singleShot(50, &parent, [&]() {
+                    fakeFolder.syncEngine().abort();
+                });
                 moveChecksumHeader = request.rawHeader("OC-Checksum");
                 return new DelayedReply<FakeChunkMoveReply>(responseDelay, fakeFolder.uploadState(), fakeFolder.remoteModifier(), op, request, &parent);
             } else if (op == QNetworkAccessManager::GetOperation) {
@@ -352,7 +366,6 @@ private Q_SLOTS:
             }
             return nullptr;
         });
-
 
         // Test 1: NEW file aborted
         fakeFolder.localModifier().insert("A/a0", size);
@@ -402,8 +415,9 @@ private Q_SLOTS:
     // the final MOVE is short enough for the abort-delay to help
     void testLateAbortRecoverable()
     {
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ { "chunking", "1.0" } } }, { "checksums", QVariantMap{ { "supportedTypes", QStringList() << "SHA1" } } } });
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        fakeFolder.syncEngine().account()->setCapabilities(
+            {{"dav", QVariantMap{{"chunking", "1.0"}}}, {"checksums", QVariantMap{{"supportedTypes", QStringList() << "SHA1"}}}});
         const int size = 15 * 1000 * 1000; // 15 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
@@ -412,7 +426,9 @@ private Q_SLOTS:
         int responseDelay = 200; // smaller than abort-wait timeout
         fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
             if (request.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "MOVE") {
-                QTimer::singleShot(50, &parent, [&]() { fakeFolder.syncEngine().abort(); });
+                QTimer::singleShot(50, &parent, [&]() {
+                    fakeFolder.syncEngine().abort();
+                });
                 return new DelayedReply<FakeChunkMoveReply>(responseDelay, fakeFolder.uploadState(), fakeFolder.remoteModifier(), op, request, &parent);
             }
             return nullptr;
@@ -430,17 +446,16 @@ private Q_SLOTS:
     }
 
     // We modify the file locally after it has been partially uploaded
-    void testRemoveStale1() {
-
+    void testRemoveStale1()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 10 * 1000 * 1000; // 10 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
         partialUpload(fakeFolder, "A/a0", size);
         QCOMPARE(fakeFolder.uploadState().children.count(), 1);
         auto chunkingId = fakeFolder.uploadState().children.first().name;
-
 
         fakeFolder.localModifier().setContents("A/a0", 'B');
         fakeFolder.localModifier().appendByte("A/a0");
@@ -455,10 +470,10 @@ private Q_SLOTS:
     }
 
     // We remove the file locally after it has been partially uploaded
-    void testRemoveStale2() {
-
+    void testRemoveStale2()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 10 * 1000 * 1000; // 10 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
@@ -471,10 +486,10 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.uploadState().children.count(), 0);
     }
 
-
-    void testCreateConflictWhileSyncing() {
+    void testCreateConflictWhileSyncing()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 10 * 1000 * 1000; // 10 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
@@ -488,12 +503,11 @@ private Q_SLOTS:
         fakeFolder.localModifier().appendByte("A/a0");
 
         // But in the middle of the sync, modify the file on the server
-        QMetaObject::Connection con = QObject::connect(&fakeFolder.syncEngine(), &SyncEngine::transmissionProgress,
-                                    [&](const ProgressInfo &progress) {
-                if (progress.completedSize() > (progress.totalSize() / 2 )) {
-                    fakeFolder.remoteModifier().setContents("A/a0", 'C');
-                    QObject::disconnect(con);
-                }
+        QMetaObject::Connection con = QObject::connect(&fakeFolder.syncEngine(), &SyncEngine::transmissionProgress, [&](const ProgressInfo &progress) {
+            if (progress.completedSize() > (progress.totalSize() / 2)) {
+                fakeFolder.remoteModifier().setContents("A/a0", 'C');
+                QObject::disconnect(con);
+            }
         });
 
         QVERIFY(!fakeFolder.syncOnce());
@@ -517,7 +531,7 @@ private Q_SLOTS:
         });
         QVERIFY(it != stateAChildren.cend());
         QCOMPARE(it->contentChar, 'B');
-        QCOMPARE(it->size, size+1);
+        QCOMPARE(it->size, size + 1);
 
         // Remove the conflict file so the comparison works!
         fakeFolder.localModifier().remove("A/" + it->name);
@@ -527,23 +541,22 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.uploadState().children.count(), 0); // The last sync cleaned the chunks
     }
 
-    void testModifyLocalFileWhileUploading() {
-
+    void testModifyLocalFileWhileUploading()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 10 * 1000 * 1000; // 10 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
         fakeFolder.localModifier().insert("A/a0", size);
 
         // middle of the sync, modify the file
-        QMetaObject::Connection con = QObject::connect(&fakeFolder.syncEngine(), &SyncEngine::transmissionProgress,
-                                    [&](const ProgressInfo &progress) {
-                if (progress.completedSize() > (progress.totalSize() / 2 )) {
-                    fakeFolder.localModifier().setContents("A/a0", 'B');
-                    fakeFolder.localModifier().appendByte("A/a0");
-                    QObject::disconnect(con);
-                }
+        QMetaObject::Connection con = QObject::connect(&fakeFolder.syncEngine(), &SyncEngine::transmissionProgress, [&](const ProgressInfo &progress) {
+            if (progress.completedSize() > (progress.totalSize() / 2)) {
+                fakeFolder.localModifier().setContents("A/a0", 'B');
+                fakeFolder.localModifier().appendByte("A/a0");
+                QObject::disconnect(con);
+            }
         });
 
         QVERIFY(!fakeFolder.syncOnce());
@@ -558,18 +571,17 @@ private Q_SLOTS:
         QVERIFY(fakeFolder.syncOnce());
 
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
-        QCOMPARE(fakeFolder.currentRemoteState().find("A/a0")->size, size+1);
+        QCOMPARE(fakeFolder.currentRemoteState().find("A/a0")->size, size + 1);
 
         // A different chunk id was used, and the previous one is removed
         QCOMPARE(fakeFolder.uploadState().children.count(), 1);
         QVERIFY(fakeFolder.uploadState().children.first().name != chunkingId);
     }
 
-
-    void testResumeServerDeletedChunks() {
-
+    void testResumeServerDeletedChunks()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 30 * 1000 * 1000; // 30 MB
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
         partialUpload(fakeFolder, "A/a0", size);
@@ -599,8 +611,9 @@ private Q_SLOTS:
     void connectionDroppedBeforeEtagRecieved()
     {
         QFETCH(bool, chunking);
-        FakeFolder fakeFolder{ FileInfo::A12_B12_C12_S12() };
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ { "chunking", "1.0" } } }, { "checksums", QVariantMap{ { "supportedTypes", QStringList() << "SHA1" } } } });
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        fakeFolder.syncEngine().account()->setCapabilities(
+            {{"dav", QVariantMap{{"chunking", "1.0"}}}, {"checksums", QVariantMap{{"supportedTypes", QStringList() << "SHA1"}}}});
         const int size = chunking ? 1 * 1000 * 1000 : 300;
         setChunkSize(fakeFolder.syncEngine(), 300 * 1000);
 
@@ -612,15 +625,24 @@ private Q_SLOTS:
         // This will perform the operation on the server, but the reply will not come to the client
         fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *outgoingData) -> QNetworkReply * {
             if (!chunking) {
-                Q_ASSERT(!request.url().path().contains("/uploads/")
-                    && "Should not touch uploads endpoint when not chunking");
+                Q_ASSERT(!request.url().path().contains("/uploads/") && "Should not touch uploads endpoint when not chunking");
             }
             if (!chunking && op == QNetworkAccessManager::PutOperation) {
                 checksumHeader = request.rawHeader("OC-Checksum");
-                return new DelayedReply<FakePutReply>(responseDelay, fakeFolder.remoteModifier(), op, request, outgoingData->readAll(), &fakeFolder.syncEngine());
+                return new DelayedReply<FakePutReply>(responseDelay,
+                                                      fakeFolder.remoteModifier(),
+                                                      op,
+                                                      request,
+                                                      outgoingData->readAll(),
+                                                      &fakeFolder.syncEngine());
             } else if (chunking && request.attribute(QNetworkRequest::CustomVerbAttribute).toString() == "MOVE") {
                 checksumHeader = request.rawHeader("OC-Checksum");
-                return new DelayedReply<FakeChunkMoveReply>(responseDelay, fakeFolder.uploadState(), fakeFolder.remoteModifier(), op, request, &fakeFolder.syncEngine());
+                return new DelayedReply<FakeChunkMoveReply>(responseDelay,
+                                                            fakeFolder.uploadState(),
+                                                            fakeFolder.remoteModifier(),
+                                                            op,
+                                                            request,
+                                                            &fakeFolder.syncEngine());
             } else if (op == QNetworkAccessManager::GetOperation) {
                 nGET++;
             }
@@ -652,10 +674,11 @@ private Q_SLOTS:
         QCOMPARE(nGET, 0);
     }
 
-    void testPercentEncoding() {
+    void testPercentEncoding()
+    {
         QTextCodec::codecForLocale()->setCodecForLocale(QTextCodec::codecForName("UTF-8"));
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
         const int size = 5 * 1000 * 1000;
         setChunkSize(fakeFolder.syncEngine(), 1 * 1000 * 1000);
 
@@ -670,9 +693,10 @@ private Q_SLOTS:
     }
 
     // Test uploading large files (2.5GiB)
-    void testVeryBigFiles() {
+    void testVeryBigFiles()
+    {
         FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
-        fakeFolder.syncEngine().account()->setCapabilities({ { "dav", QVariantMap{ {"chunking", "1.0"} } } });
+        fakeFolder.syncEngine().account()->setCapabilities({{"dav", QVariantMap{{"chunking", "1.0"}}}});
 
         // Dynamic chunk sizing tries to go for biggest chunks possible depending on upload speed.
         // In the tests this is immediate, so we need to give a file larger than the max chunk size
@@ -702,8 +726,6 @@ private Q_SLOTS:
         QCOMPARE(fakeFolder.currentLocalState(), fakeFolder.currentRemoteState());
         QCOMPARE(fakeFolder.currentRemoteState().find("A/a0")->size, size + 1);
     }
-
-
 };
 
 QTEST_GUILESS_MAIN(TestChunkingNG)

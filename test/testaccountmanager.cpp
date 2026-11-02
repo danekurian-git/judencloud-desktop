@@ -7,6 +7,7 @@
  * any purpose.
  */
 
+#include "accounttestutils.h"
 #include <QtTest>
 
 #include <QStandardPaths>
@@ -46,7 +47,7 @@ private:
     AccountState *addTestAccount(const QString &serverUrl, const QString &davUser)
     {
         auto account = Account::create();
-        account->setUrl(QUrl(serverUrl));
+        AccountTestAccess::setUrl(*account, QUrl(serverUrl));
         account->setDavUser(davUser);
         account->setCredentials(new FakeCredentials{new FakeQNAM({})});
         _accountState = AccountManager::instance()->addAccount(account);
@@ -143,45 +144,23 @@ private Q_SLOTS:
         // Account configured with the Unicode form of an IDN hostname.
         // The nc://open/ link may arrive with the corresponding ACE/Punycode form.
         QTest::newRow("unicode server url, unicode userid")
-            << u"https://cloud.münchen.example"_s
-            << u"testuser"_s
-            << u"testuser@cloud.münchen.example"_s
-            << true;
+            << u"https://cloud.münchen.example"_s << u"testuser"_s << u"testuser@cloud.münchen.example"_s << true;
 
-        QTest::newRow("unicode server url, punycode userid")
-            << u"https://cloud.münchen.example"_s
-            << u"testuser"_s
-            << u"testuser@"_s + punycodeHost
-            << true;
+        QTest::newRow("unicode server url, punycode userid") << u"https://cloud.münchen.example"_s << u"testuser"_s << u"testuser@"_s + punycodeHost << true;
 
         // Account configured with the ACE/Punycode form (as reported in the bug):
         // QUrl::host() decodes it to Unicode internally, so the stored host is
         // Unicode regardless. Both userId forms must still match.
-        QTest::newRow("punycode server url, punycode userid")
-            << u"https://"_s + punycodeHost
-            << u"testuser"_s
-            << u"testuser@"_s + punycodeHost
-            << true;
+        QTest::newRow("punycode server url, punycode userid") << u"https://"_s + punycodeHost << u"testuser"_s << u"testuser@"_s + punycodeHost << true;
 
-        QTest::newRow("punycode server url, unicode userid")
-            << u"https://"_s + punycodeHost
-            << u"testuser"_s
-            << u"testuser@cloud.münchen.example"_s
-            << true;
+        QTest::newRow("punycode server url, unicode userid") << u"https://"_s + punycodeHost << u"testuser"_s << u"testuser@cloud.münchen.example"_s << true;
 
         // A Punycode userid for a completely different domain must not match.
         QTest::newRow("punycode server url, mismatched punycode userid")
-            << u"https://"_s + punycodeHost
-            << u"testuser"_s
-            << u"testuser@"_s + mismatchedPunycodeHost
-            << false;
+            << u"https://"_s + punycodeHost << u"testuser"_s << u"testuser@"_s + mismatchedPunycodeHost << false;
 
         // Non-IDN ASCII domain must still work normally.
-        QTest::newRow("ascii server url, ascii userid")
-            << u"https://nextcloud.example.com"_s
-            << u"testuser"_s
-            << u"testuser@nextcloud.example.com"_s
-            << true;
+        QTest::newRow("ascii server url, ascii userid") << u"https://nextcloud.example.com"_s << u"testuser"_s << u"testuser@nextcloud.example.com"_s << true;
     }
 
     //! @brief Verifies that accountFromUserId correctly matches (or rejects)
@@ -225,16 +204,10 @@ private Q_SLOTS:
         QVERIFY2(!punycodeHost.isEmpty(), "The Unicode test host must convert to Punycode");
 
         QTest::newRow("unicode server url with port, punycode userid with port")
-            << u"https://"_s + unicodeHost + u":8443"_s
-            << u"testuser"_s
-            << u"testuser@"_s + punycodeHost + u":8443"_s
-            << true;
+            << u"https://"_s + unicodeHost + u":8443"_s << u"testuser"_s << u"testuser@"_s + punycodeHost + u":8443"_s << true;
 
         QTest::newRow("punycode server url with port, unicode userid with port")
-            << u"https://"_s + punycodeHost + u":8443"_s
-            << u"testuser"_s
-            << u"testuser@"_s + unicodeHost + u":8443"_s
-            << true;
+            << u"https://"_s + punycodeHost + u":8443"_s << u"testuser"_s << u"testuser@"_s + unicodeHost + u":8443"_s << true;
     }
 
     //! @brief Companion to testAccountFromUserId_idnDomain covering the port
@@ -334,7 +307,13 @@ private Q_SLOTS:
 
             writeAccount(authType, authType == QStringLiteral("http") ? QStringLiteral("http_user") : QStringLiteral("webflow_user"));
 
-            QCOMPARE(AccountManager::instance()->restore(false), AccountManager::AccountsRestoreSuccess);
+            const auto restored = AccountManager::instance()->restore(false);
+            if (!Account::enforcedServerUrl().isEmpty()) {
+                QCOMPARE(restored, AccountManager::AccountsRestoreSuccessWithSkipped);
+                QVERIFY(AccountManager::instance()->accounts().isEmpty());
+                continue;
+            }
+            QCOMPARE(restored, AccountManager::AccountsRestoreSuccess);
             const auto accounts = AccountManager::instance()->accounts();
             QCOMPARE(accounts.size(), 1);
             QCOMPARE(accounts.first()->account()->credentials()->authType(), QStringLiteral("http"));
