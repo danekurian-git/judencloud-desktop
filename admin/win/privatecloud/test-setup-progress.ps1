@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
 # SPDX-License-Identifier: GPL-2.0-or-later
 param(
-    [string]$OutputDirectory = 'D:\JudencloudBuild\setup-progress-tests',
-    [string]$LogPath = 'D:\JudencloudBuild\logs\setup-progress-tests-20260923.txt'
+    [string]$OutputDirectory = (Join-Path ([IO.Path]::GetTempPath()) ('privateCloud-setup-progress-' + [guid]::NewGuid().ToString('N'))),
+    [string]$LogPath = ''
 )
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($LogPath)) { $LogPath = Join-Path $OutputDirectory 'setup-progress-tests.log' }
 $compiler = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $sourceDirectory = $PSScriptRoot
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
