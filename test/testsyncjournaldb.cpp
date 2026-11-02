@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: 2022 Nextcloud GmbH and Nextcloud contributors
  * SPDX-FileCopyrightText: 2014 ownCloud, Inc.
  * SPDX-License-Identifier: CC0-1.0
- * 
+ *
  * This software is in the public domain, furnished "as is", without technical
  * support, and with no warranty, express or implied, as to its usefulness for
  * any purpose.
@@ -128,9 +128,10 @@ private Q_SLOTS:
         QCOMPARE(storedRecord._folderQuota.bytesUsed, 100);
     }
 
-    void testFolderMigration() {
-        const auto quotaBytesUsed =  QStringLiteral("quotaBytesUsed");
-        const auto quotaBytesAvailable =  QStringLiteral("quotaBytesAvailable");
+    void testFolderMigration()
+    {
+        const auto quotaBytesUsed = QStringLiteral("quotaBytesUsed");
+        const auto quotaBytesAvailable = QStringLiteral("quotaBytesAvailable");
         const auto metadata = QStringLiteral("metadata");
         const auto columnsBeforeRemoval = _db.tableColumns(metadata.toLatin1());
         QCOMPARE_GT(columnsBeforeRemoval.indexOf(quotaBytesUsed.toLatin1()), -1);
@@ -173,12 +174,9 @@ private Q_SLOTS:
             QVERIFY(journal.setFileRecord(record));
             records.append(record);
         }
-        journal.close();
-
         {
-            SqlDatabase legacyDb;
-            QVERIFY(legacyDb.openOrCreateReadWrite(journal.databaseFilePath()));
-            SqlQuery query(legacyDb);
+            // Keep the journal's SQL functions registered while changing its indexed schema.
+            SqlQuery query(journal._db);
             query.prepare("UPDATE metadata SET inode=NULL WHERE path='unknown';");
             QVERIFY(query.exec());
             if (hasUniqueInodeIndex) {
@@ -186,6 +184,8 @@ private Q_SLOTS:
                 QVERIFY(query.exec());
             }
         }
+
+        journal.close();
 
         for (auto openCount = 0; openCount < 2; ++openCount) {
             QVERIFY(journal.checkConnect());
@@ -412,23 +412,22 @@ private Q_SLOTS:
         };
 
         QByteArrayList elements;
-        elements
-            << "foo"
-            << "foo/file"
-            << "bar"
-            << "moo"
-            << "moo/file"
-            << "foo%bar"
-            << "foo bla bar/file"
-            << "fo_"
-            << "fo_/file";
-        for (const auto& elem : std::as_const(elements)) {
+        elements << "foo"
+                 << "foo/file"
+                 << "bar"
+                 << "moo"
+                 << "moo/file"
+                 << "foo%bar"
+                 << "foo bla bar/file"
+                 << "fo_"
+                 << "fo_/file";
+        for (const auto &elem : std::as_const(elements)) {
             makeEntry(elem);
         }
 
         auto checkElements = [&]() {
             bool ok = true;
-            for (const auto& elem : std::as_const(elements)) {
+            for (const auto &elem : std::as_const(elements)) {
                 SyncJournalFileRecord record;
                 if (!_db.getFileRecord(elem, &record) || !record.isValid()) {
                     qWarning() << "Missing record: " << elem;
@@ -641,7 +640,7 @@ private Q_SLOTS:
         QVERIFY(_db.hasFileIds({037})); // octal
         QVERIFY(!_db.hasFileIds({37})); // decimal
 
-        QVERIFY(!_db.hasFileIds({33}));    // 33 does not exist...
+        QVERIFY(!_db.hasFileIds({33})); // 33 does not exist...
         QVERIFY(_db.hasFileIds({33, 25})); // ...but 25 does
 
         // nothing doesn't exist

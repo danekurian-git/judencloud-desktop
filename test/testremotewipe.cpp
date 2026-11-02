@@ -118,7 +118,7 @@ private Q_SLOTS:
         wipe->startCheckJobWithAppPassword(QStringLiteral("duplicate"));
         QTRY_VERIFY(!wipe->_networkReplyCheck);
         QCOMPARE(requests, 1);
-        QCOMPARE(sentBody, QByteArrayLiteral("token=[REDACTED_SECRET]"));
+        QCOMPARE(sentBody, QByteArrayLiteral("token=test%26token%3D%2B%25"));
         QCOMPARE(redirectPolicy.toInt(), int(QNetworkRequest::ManualRedirectPolicy));
         QCOMPARE(authorizedSpy.count(), authorized ? 1 : 0);
         if (authorized) {
@@ -225,7 +225,7 @@ private Q_SLOTS:
                 return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument::fromJson(R"({"wipe":true})"));
             }
             ++acknowledgments;
-            if (body->readAll() != QByteArrayLiteral("token=[REDACTED_SECRET]")) {
+            if (body->readAll() != QByteArrayLiteral("token=synthetic-token")) {
                 return new FakeErrorReply(op, request, wipe.get(), 400);
             }
             return new FakeJsonReply(op, request, wipe.get(), 200, QJsonDocument(QJsonObject{}));
