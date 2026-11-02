@@ -29,7 +29,37 @@ jobs:
         run: cmake --build build/direct-broker --config Release --parallel 4
       - name: Test scoped routing, lifecycle and unrelated notifications
         shell: pwsh
-        run: ctest --test-dir build/direct-broker -C Release --output-on-failure --timeout 60
+        run: ctest --test-dir build/direct-broker -C Release --output-on-failure --timeout 60 -E BrokerPipeLifecycleNativeTests
+      - name: Test pipe security as a standard Windows user
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # This account exists only in the disposable hosted runner. The pipe
+          # ACL test must not inherit the administrator grant being tested.
+          $userName = 'privateCloudTest'
+          $password = ConvertTo-SecureString (([guid]::NewGuid().ToString('N')) + '!Aa1') -AsPlainText -Force
+          $credential = [pscredential]::new("$env:COMPUTERNAME\$userName", $password)
+          $testDirectory = Join-Path $env:RUNNER_TEMP 'pipe-standard-user'
+          New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
+          Copy-Item 'build/direct-broker/Release/BrokerPipeLifecycleTests.exe' $testDirectory
+          $user = New-LocalUser -Name $userName -Password $password
+          try {
+            Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $user
+            & icacls $testDirectory /grant '*S-1-5-32-545:(OI)(CI)RX'
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot grant test executable access' }
+            $stdout = Join-Path $env:RUNNER_TEMP 'pipe-standard-user.stdout.log'
+            $stderr = Join-Path $env:RUNNER_TEMP 'pipe-standard-user.stderr.log'
+            $process = Start-Process -FilePath (Join-Path $testDirectory 'BrokerPipeLifecycleTests.exe') -WorkingDirectory $testDirectory -Credential $credential -LoadUserProfile -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+            if (!$process.WaitForExit(60000)) {
+              $process.Kill()
+              throw 'Standard-user pipe test exceeded 60 seconds'
+            }
+            Get-Content $stdout
+            Get-Content $stderr
+            if ($process.ExitCode -ne 0) { throw "Standard-user pipe test failed: $($process.ExitCode)" }
+          } finally {
+            Remove-LocalUser -Name $userName
+          }
       - name: Test installer payload admission and source snapshots
         shell: pwsh
         run: python -B -m unittest discover -s admin/win/privatecloud -p "test_*.py" -v

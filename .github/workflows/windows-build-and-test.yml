@@ -5,6 +5,17 @@ on:
   workflow_dispatch:
   push:
     branches: [master, 'privatecloud/**']
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'theme/**'
+      - 'cmake/**'
+      - '*.cmake'
+      - 'CMakeLists.txt'
+      - 'config.h.in'
+      - 'resources.qrc'
+      - 'craftmaster.ini'
+      - '.github/workflows/windows-build-and-test.yml'
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, closed]
 
