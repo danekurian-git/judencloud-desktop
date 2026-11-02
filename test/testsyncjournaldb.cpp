@@ -177,10 +177,10 @@ private Q_SLOTS:
         {
             // Keep the journal's SQL functions registered while changing its indexed schema.
             SqlQuery query(journal._db);
-            query.prepare("UPDATE metadata SET inode=NULL WHERE path='unknown';");
+            QVERIFY2(query.prepare("UPDATE metadata SET inode=NULL WHERE path='unknown';", true) == SQLITE_OK, qPrintable(query.error()));
             QVERIFY(query.exec());
             if (hasUniqueInodeIndex) {
-                query.prepare("CREATE UNIQUE INDEX metadata_unique_inode ON metadata(inode);");
+                QVERIFY2(query.prepare("CREATE UNIQUE INDEX metadata_unique_inode ON metadata(inode);", true) == SQLITE_OK, qPrintable(query.error()));
                 QVERIFY(query.exec());
             }
         }
@@ -191,7 +191,8 @@ private Q_SLOTS:
             QVERIFY(journal.checkConnect());
             {
                 SqlQuery query(journal._db);
-                query.prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='metadata_unique_inode';");
+                QVERIFY2(query.prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='metadata_unique_inode';", true) == SQLITE_OK,
+                         qPrintable(query.error()));
                 QVERIFY(query.exec());
                 QVERIFY(query.next().hasData);
                 QCOMPARE(query.intValue(0), 0);

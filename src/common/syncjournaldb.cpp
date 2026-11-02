@@ -603,6 +603,8 @@ bool SyncJournalDb::checkConnect()
             return sqlFail(QStringLiteral("Update mount type permissions version"), createQuery);
         }
     }
+    // An active reader prevents SQLite from dropping indexes during migration.
+    mountTypeVersionQuery.reset_and_clear_bindings();
 
     SqlQuery versionQuery("SELECT major, minor, patch FROM version;", _db);
     if (!versionQuery.next().hasData) {
