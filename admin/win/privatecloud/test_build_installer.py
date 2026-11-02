@@ -123,7 +123,7 @@ class PayloadAdmissionTest(unittest.TestCase):
             self.assertEqual(len(PACKAGER.validate_package(package)), len(PACKAGER.REQUIRED_RUNTIME))
             manifest = package / 'privatecloud-runtime-requirements.json'
             manifest.write_text(json.dumps(runtime_requirements()), encoding='utf-8')
-            self.assertIn(manifest, PACKAGER.validate_package(package))
+            self.assertIn(manifest.resolve(), PACKAGER.validate_package(package))
 
     def test_helper_dependent_package_stops_before_compiler_or_output_creation(self):
         with tempfile.TemporaryDirectory(prefix='privatecloud-package-test-') as temp:
