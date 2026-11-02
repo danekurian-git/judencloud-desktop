@@ -144,6 +144,7 @@ jobs:
           
       - name: Run tests
         shell: pwsh
+        timeout-minutes: 25
         env:
           QT_FORCE_STDERR_LOGGING: '1'
         run: |
@@ -155,6 +156,7 @@ jobs:
               $binFolder = "$buildFolder\bin"
               $diagnostics = Join-Path $env:RUNNER_TEMP 'privatecloud-test-diagnostics'
               New-Item -ItemType Directory -Path $diagnostics -Force | Out-Null
+              $testDefinitions = (& ctest --show-only=json-v1 | ConvertFrom-Json).tests
               & ctest --output-on-failure --timeout 300 --output-junit (Join-Path $diagnostics 'ctest.xml')
               $testResult = $LASTEXITCODE
               if ($testResult -ne 0) {
@@ -168,11 +170,24 @@ jobs:
                           $testExe = Join-Path $binFolder ($testName + '.exe')
                           if (!(Test-Path -LiteralPath $testExe)) { continue }
                           $testLog = Join-Path $diagnostics ($testName + '.log')
-                          $process = Start-Process -FilePath $testExe -ArgumentList ('-o "' + $testLog + ',txt"') -WorkingDirectory $binFolder -WindowStyle Hidden -PassThru
-                          if (!$process.WaitForExit(60000)) {
-                              $process.Kill($true)
-                              $process.WaitForExit()
-                              Write-Warning "$testName diagnostic rerun exceeded 60 seconds"
+                          $definition = $testDefinitions | Where-Object name -EQ $testName
+                          $previousEnvironment = @{}
+                          try {
+                              foreach ($setting in ($definition.properties | Where-Object name -EQ 'ENVIRONMENT').value) {
+                                  $key, $value = $setting -split '=', 2
+                                  $previousEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+                                  [Environment]::SetEnvironmentVariable($key, $value, 'Process')
+                              }
+                              $process = Start-Process -FilePath $testExe -ArgumentList ('-o "' + $testLog + ',txt"') -WorkingDirectory $binFolder -WindowStyle Hidden -PassThru
+                              if (!$process.WaitForExit(60000)) {
+                                  $process.Kill($true)
+                                  $process.WaitForExit()
+                                  Write-Warning "$testName diagnostic rerun exceeded 60 seconds"
+                              }
+                          } finally {
+                              foreach ($key in $previousEnvironment.Keys) {
+                                  [Environment]::SetEnvironmentVariable($key, $previousEnvironment[$key], 'Process')
+                              }
                           }
                           if (Test-Path -LiteralPath $testLog) { Get-Content -LiteralPath $testLog }
                       }
@@ -182,6 +197,17 @@ jobs:
           }
           
           runTests
+
+      - name: Collect CTest logs
+        if: always()
+        shell: pwsh
+        run: |
+          $testLogs = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build\Testing\Temporary"
+          $diagnostics = Join-Path $env:RUNNER_TEMP 'privatecloud-test-diagnostics'
+          if (Test-Path -LiteralPath $testLogs) {
+              New-Item -ItemType Directory -Path $diagnostics -Force | Out-Null
+              Get-ChildItem -LiteralPath $testLogs -File | Copy-Item -Destination $diagnostics
+          }
 
       - name: Preserve Windows test diagnostics
         if: always()
