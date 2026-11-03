@@ -76,7 +76,7 @@ class RuntimeStageTest(unittest.TestCase):
         with self.assertRaisesRegex(FileNotFoundError, 'one complete client DLL family'):
             STAGE.GUARD.validate_package(self.package)
 
-    def test_staging_deploys_current_build_with_explicit_openssl_location(self):
+    def test_staging_supplies_openssl_before_deploying_the_current_build(self):
         source = self.root / 'source'
         build_bin = source / 'build' / 'bin'
         build_bin.mkdir(parents=True)
@@ -104,7 +104,10 @@ class RuntimeStageTest(unittest.TestCase):
             # windeployqt rejects these two options when supplied together.
             if '--force-openssl' in command and '--openssl-root' in command:
                 raise STAGE.subprocess.CalledProcessError(1, command)
-            self.assertEqual(command[command.index('--openssl-root') + 1], str(self.deps / 'bin'))
+            self.assertIn('--force-openssl', command)
+            self.assertTrue(Path(command[-1]).samefile(package / 'privateCloud.exe'))
+            for name in ('libssl-3-x64.dll', 'libcrypto-3-x64.dll'):
+                self.assertEqual((package / name).read_bytes(), b'deployment input')
             for name in STAGE.GUARD.REQUIRED_RUNTIME:
                 target = package / name
                 if not target.exists():
