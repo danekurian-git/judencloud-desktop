@@ -22,6 +22,10 @@ REQUIRED_RUNTIME = ('privateCloud.exe', 'nextclouddevsync.dll', 'nextclouddev_cs
                     'nextclouddevsync_vfs_cfapi.dll', 'CfApiShellExtensions.dll',
                     'platforms/qwindows.dll', 'vcruntime140.dll', 'msvcp140.dll',
                     'tls/qopensslbackend.dll', 'libssl-3-x64.dll', 'libcrypto-3-x64.dll')
+CORE_RUNTIME_VARIANTS = (
+    ('nextclouddevsync.dll', 'nextclouddev_csync.dll', 'nextclouddevsync_vfs_cfapi.dll'),
+    ('nextcloudsync.dll', 'nextcloud_csync.dll', 'nextcloudsync_vfs_cfapi.dll'),
+)
 RUNTIME_REQUIREMENTS = 'privatecloud-runtime-requirements.json'
 
 
@@ -92,7 +96,16 @@ def validate_package(package: Path, *, machine: bool = False) -> list[Path]:
         validate_build_runtime_requirements(package, machine=True)
         if not (package / 'privateCloudDirectBroker.exe').is_file():
             raise FileNotFoundError('The machine package is missing privateCloudDirectBroker.exe.')
+    complete_variants = [names for names in CORE_RUNTIME_VARIANTS
+                         if all((package / name).is_file() for name in names)]
+    if len(complete_variants) != 1:
+        raise FileNotFoundError('Required runtime missing or ambiguous: expected one complete client DLL family')
+    selected = complete_variants[0]
+    if any((package / name).exists() for names in CORE_RUNTIME_VARIANTS if names != selected for name in names):
+        raise ValueError('Do not mix development and release client DLLs')
     for name in REQUIRED_RUNTIME:
+        if name in CORE_RUNTIME_VARIANTS[0]:
+            continue
         if not (package / name).is_file():
             raise FileNotFoundError('Required runtime missing: ' + name)
     files = sorted(p for p in package.rglob('*') if p.is_file() and

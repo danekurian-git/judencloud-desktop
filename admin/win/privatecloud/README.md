@@ -8,6 +8,30 @@ From this directory, package an already staged runtime into a new output directo
 python build-machine-installer.py --package <runtime-directory> --output <new-output-directory> --version <four-part-version> --icon <application-icon>
 ```
 
+For a complete build, run **Windows Build and Test** in GitHub Actions with
+`create_installer` enabled. The workflow compiles and tests the desktop client,
+then builds the helper and stages the runtime. Packaging runs only after the
+desktop tests pass. It uploads `privateCloud-Windows-x64-installer`, containing
+the unsigned setup executable, its SHA-256 checksum and installation instructions.
+
+`package-windows.ps1` also supports a local configured Craft build. It requires
+Python with `pefile==2024.8.26`, Qt's `windeployqt`, Visual Studio 2022 and its x64
+redistributable files. Supply `-Source`, `-Build`, `-Dependencies` and a new
+`-Output` directory outside the source tree. The staging step collects Qt/QML
+dependencies and recursively resolves normal and delayed DLL imports. It rejects
+unresolved dependencies, mixed development/release client DLLs, test material and
+private keys. It never stages into the installed app or an existing output folder.
+
+The package is tested with an isolated network-test runtime, and the compiled
+installer extracts and verifies its embedded payload before publication. These
+checks do not replace a Windows 11 test with real credentials, file hydration and
+an active Tailscale exit node. They do not install anything on the build machine.
+
+To add signing later, sign the runtime executables/DLLs before staging is hashed,
+sign the generated maintenance executable before archiving it, and sign the final
+installer last. Signing credentials must stay outside source and payload folders.
+The current build does not invoke a signing provider.
+
 The builder verifies admitted payload bytes, generates the maintenance executable, and refuses to overwrite an existing output directory. Test binaries, test fixtures and private-key material are excluded from shipped packages. Certificates containing only public material are handled separately from private keys. The source tree includes disposable TLS fixtures for isolated tests; never copy the test directory into a runtime package.
 
 The installer preserves the existing account configuration and selected sync folder during updates. Its maintenance and rollback behavior is covered by the installer suites. Do not delete a user's sync data as part of an ordinary update or uninstall.

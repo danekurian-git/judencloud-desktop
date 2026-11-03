@@ -39,7 +39,16 @@ def main():
              '/win32manifest:' + str(SOURCE / 'privatecloud.manifest')]
     if args.icon:
         flags.append('/win32icon:' + str(args.icon.resolve(strict=True)))
-    common = [str(SOURCE / name) for name in names]
+    numeric_version = args.version if re.fullmatch(r'\d+\.\d+\.\d+\.\d+', args.version) else '0.0.0.0'
+    metadata = output / 'AssemblyInfo.cs'
+    metadata.write_text('using System.Reflection;\n'
+                        '[assembly: AssemblyTitle("privateCloud Setup")]\n'
+                        '[assembly: AssemblyProduct("privateCloud")]\n'
+                        '[assembly: AssemblyDescription("privateCloud Windows installer")]\n'
+                        '[assembly: AssemblyVersion("' + numeric_version + '")]\n'
+                        '[assembly: AssemblyFileVersion("' + numeric_version + '")]\n'
+                        '[assembly: AssemblyInformationalVersion("' + args.version + '")]\n', encoding='utf-8')
+    common = [str(SOURCE / name) for name in names] + [str(metadata)]
     maintenance = output / 'privateCloudMaintenance.exe'
     subprocess.run(flags + ['/out:' + str(maintenance)] + common, check=True)
     items = [(p.relative_to(package).as_posix(), p) for p in files]

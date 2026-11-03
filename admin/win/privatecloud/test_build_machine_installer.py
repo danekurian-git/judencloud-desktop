@@ -91,6 +91,10 @@ class MachineBuildTest(unittest.TestCase):
                       (self.output / 'package.sha256').read_text(encoding='utf-8').splitlines())
         self.assertEqual(hashes, {name: hashlib.sha256(data).hexdigest() for name, data in expected.items()})
         self.assertEqual((self.output / 'version.txt').read_text(encoding='utf-8'), '2026.09.23-test')
+        metadata = (self.output / 'AssemblyInfo.cs').read_text(encoding='utf-8')
+        self.assertIn('AssemblyProduct("privateCloud")', metadata)
+        self.assertIn('AssemblyInformationalVersion("2026.09.23-test")', metadata)
+        self.assertNotIn('AssemblyInfo.cs', expected)
         first, second = [call.args[0] for call in run.call_args_list]
         self.assertFalse(any(arg.startswith('/resource:') for arg in first))
         self.assertEqual({arg.split(',')[-1] for arg in second if arg.startswith('/resource:')},

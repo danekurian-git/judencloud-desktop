@@ -199,7 +199,7 @@ class PayloadAdmissionTest(unittest.TestCase):
         configured = os.environ.get('PRIVATECLOUD_PACKAGE_UNDER_TEST')
         if not configured:
             self.skipTest('Set PRIVATECLOUD_PACKAGE_UNDER_TEST for the read-only runtime package audit.')
-        files = PACKAGER.validate_package(Path(configured))
+        files = PACKAGER.validate_package(Path(configured), machine=True)
         self.assertGreater(len(files), len(PACKAGER.REQUIRED_RUNTIME))
         self.assertTrue(any(path.name == 'privateCloud.exe' for path in files))
 
