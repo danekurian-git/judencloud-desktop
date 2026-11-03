@@ -140,6 +140,15 @@ jobs:
       - name: Compile
         shell: pwsh
         run: |
+          if ('${{ inputs.create_installer }}' -eq 'true') {
+              # Deployed privateCloud releases use the NextcloudDev profile and
+              # keychain identity. Keep it until an explicit migration exists.
+              $config = Get-Content -LiteralPath '${{ env.CRAFT_MASTER_CONFIG }}' -Raw
+              $anchor = 'nextcloud-client.buildTests = True'
+              if (!$config.Contains($anchor)) { throw 'Craft client settings were not found.' }
+              $config.Replace($anchor, "$anchor`nnextcloud-client.devMode = True") |
+                  Set-Content -LiteralPath '${{ env.CRAFT_MASTER_CONFIG }}' -Encoding utf8
+          }
           function craft() {
               python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
               if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}

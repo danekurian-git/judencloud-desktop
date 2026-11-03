@@ -13,6 +13,10 @@ For a complete build, run **Windows Build and Test** in GitHub Actions with
 then builds the helper and stages the runtime. Packaging runs only after the
 desktop tests pass. It uploads `privateCloud-Windows-x64-installer`, containing
 the unsigned setup executable, its SHA-256 checksum and installation instructions.
+Installer builds retain the deployed `NextcloudDev` configuration/keychain
+identity using Craft's `nextcloud-client.devMode` option. The visible product
+name remains privateCloud. Changing the internal identity requires a separate
+profile migration; packaging must not silently create a different user profile.
 
 `package-windows.ps1` also supports a local configured Craft build. It requires
 Python with `pefile==2024.8.26`, Qt's `windeployqt`, Visual Studio 2022 and its x64
