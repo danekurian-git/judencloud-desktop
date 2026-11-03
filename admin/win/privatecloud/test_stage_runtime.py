@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Runtime staging dependency closure and package admission regression tests."""
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -74,6 +75,50 @@ class RuntimeStageTest(unittest.TestCase):
         (self.package / STAGE.GUARD.CORE_RUNTIME_VARIANTS[1][2]).unlink()
         with self.assertRaisesRegex(FileNotFoundError, 'one complete client DLL family'):
             STAGE.GUARD.validate_package(self.package)
+
+    def test_staging_deploys_current_build_with_explicit_openssl_location(self):
+        source = self.root / 'source'
+        build_bin = source / 'build' / 'bin'
+        build_bin.mkdir(parents=True)
+        (source / 'src' / 'gui').mkdir(parents=True)
+        (source / 'LICENSES').mkdir()
+        (source / 'sync-exclude.lst').write_text('exclude fixture\n')
+        (source / 'unrelated-source.txt').write_text('Do not package the source tree')
+        family = STAGE.GUARD.CORE_RUNTIME_VARIANTS[0]
+        for name in ('nextclouddev.exe', 'CfApiShellExtensions.dll', *family):
+            (build_bin / name).write_bytes(b'current build ' + name.encode())
+        (build_bin / STAGE.GUARD.RUNTIME_REQUIREMENTS).write_text(json.dumps({
+            'schema': 1, 'directConnectionHelperRequired': True,
+            'service': 'privateCloudDirectBroker', 'installScope': 'machine'}))
+        (self.deps / 'bin').mkdir()
+        for name in ('windeployqt.exe', 'libssl-3-x64.dll', 'libcrypto-3-x64.dll'):
+            (self.deps / 'bin' / name).write_bytes(b'deployment input')
+        broker = self.root / 'broker.exe'
+        broker.write_bytes(b'current broker')
+        redist = self.root / 'redist'
+        redist.mkdir()
+        package = self.root / 'staged'
+
+        def deploy(command, *, check):
+            self.assertTrue(check)
+            # windeployqt rejects these two options when supplied together.
+            if '--force-openssl' in command and '--openssl-root' in command:
+                raise STAGE.subprocess.CalledProcessError(1, command)
+            self.assertEqual(command[command.index('--openssl-root') + 1], str(self.deps / 'bin'))
+            for name in STAGE.GUARD.REQUIRED_RUNTIME:
+                target = package / name
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b'Qt deployment fixture')
+
+        with mock.patch.object(STAGE.subprocess, 'run', side_effect=deploy), \
+                mock.patch.object(STAGE, 'collect_dependencies'):
+            STAGE.main(source=source, build_bin=build_bin, deps=self.deps, package=package,
+                       machine=True, broker=broker, redist=redist)
+        self.assertEqual((package / 'privateCloud.exe').read_bytes(), b'current build nextclouddev.exe')
+        self.assertEqual((package / 'privateCloudDirectBroker.exe').read_bytes(), b'current broker')
+        self.assertFalse((package / 'unrelated-source.txt').exists())
+        self.assertFalse((package / 'windeployqt.exe').exists())
 
 
 if __name__ == '__main__':

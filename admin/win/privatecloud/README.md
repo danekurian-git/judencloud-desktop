@@ -17,6 +17,10 @@ Installer builds retain the deployed `NextcloudDev` configuration/keychain
 identity using Craft's `nextcloud-client.devMode` option. The visible product
 name remains privateCloud. Changing the internal identity requires a separate
 profile migration; packaging must not silently create a different user profile.
+After a successful desktop-test job, its compiled inputs are retained separately.
+For a packaging-only correction, enable `create_installer` and set
+`tested_build_run` to that run's numeric ID. Reuse is rejected if desktop source
+or build inputs have changed, and packaging restores the same dependency cache.
 
 `package-windows.ps1` also supports a local configured Craft build. It requires
 Python with `pefile==2024.8.26`, Qt's `windeployqt`, Visual Studio 2022 and its x64

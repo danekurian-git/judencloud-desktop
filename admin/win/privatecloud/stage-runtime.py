@@ -104,7 +104,7 @@ def main(*, source, build_bin, deps, package, machine=False, broker=None, redist
     for path, relative in files:
         copy_file(path, package / relative)
     subprocess.run([str(deploy), '--release', '--no-compiler-runtime', '--no-translations',
-                    '--force-openssl', '--openssl-root', str(deps / 'bin'),
+                    '--openssl-root', str(deps / 'bin'),
                     '--qmldir', str(source / 'src' / 'gui'), '--dir', str(package),
                     str(package / 'privateCloud.exe')], check=True)
     redist = Path(redist).resolve()
