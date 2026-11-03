@@ -8,6 +8,10 @@ on:
         description: 'Package and verify an unsigned privateCloud Windows installer after tests pass'
         type: boolean
         default: false
+      tested_build_run:
+        description: 'Optional prior run with successful desktop tests; reuse its compiled inputs for packaging'
+        type: string
+        default: ''
   push:
     branches: [master, 'privatecloud/**']
     paths:
@@ -30,7 +34,7 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ github.event.action != 'closed' && !github.event.pull_request.draft }}
+    if: ${{ !inputs.tested_build_run && github.event.action != 'closed' && !github.event.pull_request.draft }}
     name: Windows Build and Test
     runs-on: windows-2022
     timeout-minutes: 90
@@ -212,27 +216,29 @@ jobs:
           
           runTests
 
-      - name: Install runtime inspection dependency
-        if: ${{ inputs.create_installer }}
-        shell: pwsh
-        run: python -m pip install pefile==2024.8.26
-
-      - name: Build and verify privateCloud installer
+      - name: Preserve tested installer inputs
         if: ${{ inputs.create_installer }}
         shell: pwsh
         run: |
-          ./admin/win/privatecloud/package-windows.ps1 `
-            -Source '${{ github.workspace }}' `
-            -Build '${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build' `
-            -Dependencies '${{ github.workspace }}\${{ env.CRAFT_TARGET }}' `
-            -Output '${{ runner.temp }}\privatecloud-package'
+          $build = '${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build'
+          $inputs = Join-Path $env:RUNNER_TEMP 'privatecloud-tested-inputs'
+          New-Item -ItemType Directory -Path "$inputs\bin", "$inputs\src\gui" | Out-Null
+          $files = @('nextclouddev.exe', 'nextclouddevsync.dll', 'nextclouddev_csync.dll',
+            'nextclouddevsync_vfs_cfapi.dll', 'CfApiShellExtensions.dll', 'privatecloud-runtime-requirements.json',
+            'PrivateCloudAuthenticationTest.exe', 'PrivateCloudTransportTest.exe', 'PrivateCloudConnectRelayTest.exe')
+          foreach ($name in $files) { Copy-Item -LiteralPath "$build\bin\$name" -Destination "$inputs\bin" }
+          Copy-Item -LiteralPath "$build\src\gui\privateCloud.ico" -Destination "$inputs\src\gui"
+          @{
+            revision = '${{ github.sha }}'
+            dependencyKey = '${{ runner.os }}-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}'
+          } | ConvertTo-Json | Set-Content -LiteralPath "$inputs\build.json" -Encoding utf8
 
-      - name: Publish verified unsigned installer artifact
+      - name: Upload tested installer inputs
         if: ${{ inputs.create_installer }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: privateCloud-Windows-x64-installer
-          path: ${{ runner.temp }}/privatecloud-package/release
+          name: privateCloud-tested-Windows-inputs
+          path: ${{ runner.temp }}/privatecloud-tested-inputs
           if-no-files-found: error
           retention-days: 30
 
@@ -255,3 +261,68 @@ jobs:
           path: ${{ runner.temp }}/privatecloud-test-diagnostics
           if-no-files-found: ignore
           retention-days: 14
+
+  package:
+    needs: build
+    if: ${{ always() && inputs.create_installer && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.tested_build_run != '')) }}
+    name: Package tested privateCloud build
+    runs-on: windows-2022
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+    env:
+      CRAFT_TARGET: windows-msvc2022_64-cl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: privateCloud-tested-Windows-inputs
+          path: ${{ runner.temp }}/privatecloud-tested-inputs
+          run-id: ${{ inputs.tested_build_run || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check compiled inputs match the current desktop source
+        id: inputs
+        shell: pwsh
+        run: |
+          $build = Get-Content -LiteralPath '${{ runner.temp }}\privatecloud-tested-inputs\build.json' -Raw | ConvertFrom-Json
+          if ($build.revision -notmatch '^[0-9a-f]{40}$' -or $build.dependencyKey -notmatch '^Windows-craft-v1-windows-msvc2022_64-cl-python-3\.12-[0-9a-f-]+$') {
+            throw 'Invalid tested-build metadata.'
+          }
+          git fetch --no-tags --depth=1 origin $build.revision
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch the tested source revision.' }
+          git diff --quiet $build.revision HEAD -- src test theme cmake '*.cmake' CMakeLists.txt config.h.in resources.qrc craftmaster.ini
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop source differs from the tested binaries. Run a full build.' }
+          "cache_key=$($build.dependencyKey)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Restore the tested runtime dependencies
+        id: package-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ github.workspace }}\CraftMaster
+            ${{ github.workspace }}\craftmaster.ini
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ steps.inputs.outputs.cache_key }}
+          fail-on-cache-miss: true
+      - name: Install runtime inspection dependency
+        shell: pwsh
+        run: python -m pip install pefile==2024.8.26
+      - name: Build and verify privateCloud installer
+        shell: pwsh
+        run: |
+          ./admin/win/privatecloud/package-windows.ps1 `
+            -Source '${{ github.workspace }}' `
+            -Build '${{ runner.temp }}\privatecloud-tested-inputs' `
+            -Dependencies '${{ github.workspace }}\${{ env.CRAFT_TARGET }}' `
+            -Output '${{ runner.temp }}\privatecloud-package'
+      - name: Publish verified unsigned installer artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: privateCloud-Windows-x64-installer
+          path: ${{ runner.temp }}/privatecloud-package/release
+          if-no-files-found: error
+          retention-days: 30

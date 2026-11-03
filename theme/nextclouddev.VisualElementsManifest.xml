@@ -1,0 +1,9 @@
+<!-- SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors -->
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<Application xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <VisualElements
+    ForegroundText="light"
+    ShowNameOnSquare150x150Logo="on"
+    Square150x150Logo="visualelements\privateCloud-w10starttile.png"
+    Square70x70Logo="visualelements\privateCloud-w10starttile.png"/>
+</Application>
