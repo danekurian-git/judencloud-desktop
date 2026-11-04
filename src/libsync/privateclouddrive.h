@@ -21,8 +21,8 @@ OWNCLOUDSYNC_EXPORT QString driveRoot();
 OWNCLOUDSYNC_EXPORT QString defaultSetupPath();
 // accountIdentity is the server URL, a newline, then the server's canonical DAV user ID.
 OWNCLOUDSYNC_EXPORT QString backingPath(const QString &accountIdentity, QString *error = nullptr);
-// Admits only a verified empty local folder for the authenticated canonical account.
-OWNCLOUDSYNC_EXPORT QString configureBackingPath(const QString &accountIdentity, const QString &path);
+// Existing folders require prior profile/account verification and a journal backup by the setup wizard.
+OWNCLOUDSYNC_EXPORT QString configureBackingPath(const QString &accountIdentity, const QString &path, bool reuseVerifiedFolder = false);
 OWNCLOUDSYNC_EXPORT QString adoptedBackingPathError(const QString &accountIdentity, const QString &path);
 OWNCLOUDSYNC_EXPORT QString checkAvailability(const QString &path);
 // Only checks the current alias against a previously validated backing path.
@@ -55,6 +55,7 @@ OWNCLOUDSYNC_EXPORT bool isMapped(const QString &path, Backend &backend);
 OWNCLOUDSYNC_EXPORT QString mount(const QString &path, Backend &backend);
 OWNCLOUDSYNC_EXPORT QString unmount(const QString &path, Backend &backend);
 OWNCLOUDSYNC_EXPORT QString backingPath(const QString &accountIdentity, const QVariantMap &adoptedRoot, Backend &backend, QString *error = nullptr);
-OWNCLOUDSYNC_EXPORT QString configureBackingPath(const QString &accountIdentity, const QString &path, Backend &backend, QSettings &settings);
+OWNCLOUDSYNC_EXPORT QString
+configureBackingPath(const QString &accountIdentity, const QString &path, Backend &backend, QSettings &settings, bool reuseVerifiedFolder = false);
 }
 }

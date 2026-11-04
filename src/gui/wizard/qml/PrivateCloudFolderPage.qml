@@ -99,6 +99,16 @@ Item {
             }
 
             EnforcedPlainTextLabel {
+                objectName: "privateCloudFolderReuse"
+                visible: root.controller.reusingExistingSyncFolder && root.controller.localSyncFolderError === ""
+                text: qsTr("Existing sync folder verified. Your files, sync history and download preferences will be kept.")
+                color: Style.wizardSecondaryText
+                font.pixelSize: Style.pixelSize
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+
+            EnforcedPlainTextLabel {
                 visible: root.controller.errorText !== ""
                     && root.controller.errorText !== root.controller.localSyncFolderError
                 text: root.controller.errorText

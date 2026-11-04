@@ -101,7 +101,7 @@ public:
 
     /** Adds a folder for an account, ensures the journal is gone and saves it in the settings.
      */
-    Folder *addFolder(AccountState *accountState, const FolderDefinition &folderDefinition);
+    Folder *addFolder(AccountState *accountState, const FolderDefinition &folderDefinition, bool reuseExistingJournal = false);
 
     /** Removes a folder */
     void removeFolder(Folder *folderToRemove);
@@ -164,7 +164,8 @@ public:
      *
      * @returns an empty string and PathValidityResult::Valid if it is allowed, or an error if it is not allowed
      */
-    [[nodiscard]] QPair<PathValidityResult, QString> checkPathValidityForNewFolder(const QString &path, const QUrl &serverUrl = QUrl()) const;
+    [[nodiscard]] QPair<PathValidityResult, QString>
+    checkPathValidityForNewFolder(const QString &path, const QUrl &serverUrl = QUrl(), const QString &existingJournal = {}) const;
 
     /**
      * Attempts to find a non-existing, acceptable path for creating a new sync folder.

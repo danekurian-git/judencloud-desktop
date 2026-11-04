@@ -1417,7 +1417,7 @@ void FolderMan::slotFolderSyncFinished(const SyncResult &)
     }
 }
 
-Folder *FolderMan::addFolder(AccountState *accountState, const FolderDefinition &folderDefinition)
+Folder *FolderMan::addFolder(AccountState *accountState, const FolderDefinition &folderDefinition, bool reuseExistingJournal)
 {
 #ifdef BUILD_FILE_PROVIDER_MODULE
     // Classic sync folders and the File Provider integration are mutually exclusive:
@@ -1436,7 +1436,16 @@ Folder *FolderMan::addFolder(AccountState *accountState, const FolderDefinition 
 
     // Choose a db filename
     auto definition = folderDefinition;
-    definition.journalPath = definition.defaultJournalPath(accountState->account());
+    if (reuseExistingJournal) {
+        const QFileInfo journal(definition.absoluteJournalPath());
+        if (definition.journalPath.isEmpty() || QFileInfo(definition.journalPath).fileName() != definition.journalPath || !journal.isFile()
+            || journal.isSymLink() || !checkPathValidityForNewFolder(definition.localPath, {}, definition.journalPath).second.isEmpty()
+            || FileSystem::isFileLocked(journal.filePath(), FileSystem::LockMode::Exclusive)) {
+            return nullptr;
+        }
+    } else {
+        definition.journalPath = definition.defaultJournalPath(accountState->account());
+    }
 
 #ifdef Q_OS_MACOS
     // macOS sandbox: prefer the bookmark from the folder picker; one made from a bare path only
@@ -1447,7 +1456,7 @@ Folder *FolderMan::addFolder(AccountState *accountState, const FolderDefinition 
     auto securityScopedAccess = Utility::MacSandboxPersistentAccess::createValidFromBookmarkData(definition.securityScopedBookmarkData);
 #endif
 
-    if (!ensureJournalGone(definition.absoluteJournalPath())) {
+    if (!reuseExistingJournal && !ensureJournalGone(definition.absoluteJournalPath())) {
         return nullptr;
     }
 
@@ -1965,7 +1974,7 @@ QString FolderMan::trayTooltipStatusString(SyncResult::Status syncStatus, bool h
     return folderMessage;
 }
 
-static QString checkPathValidityRecursive(const QString &path, const bool forNewDirectory = false)
+static QString checkPathValidityRecursive(const QString &path, const bool forNewDirectory = false, const QString &existingJournal = {})
 {
     if (path.isEmpty()) {
         return FolderMan::tr("Please choose a different location. The selected folder isn't valid.");
@@ -1975,7 +1984,8 @@ static QString checkPathValidityRecursive(const QString &path, const bool forNew
     Utility::NtfsPermissionLookupRAII ntfs_perm;
 #endif
     const QFileInfo selFile(path);
-    if (numberOfSyncJournals(selFile.filePath()) != 0) {
+    const auto journals = QDir(path).entryList({QStringLiteral(".sync_*.db"), QStringLiteral("._sync_*.db")}, QDir::Hidden | QDir::Files);
+    if (!journals.isEmpty() && (existingJournal.isEmpty() || journals != QStringList{existingJournal})) {
         return FolderMan::tr("Please choose a different location. %1 is already being used as a sync folder.")
             .arg(QDir::toNativeSeparators(selFile.filePath()));
     }
@@ -2042,7 +2052,8 @@ static QString canonicalPath(const QString &path)
     return selFile.canonicalFilePath();
 }
 
-QPair<FolderMan::PathValidityResult, QString> FolderMan::checkPathValidityForNewFolder(const QString &path, const QUrl &serverUrl) const
+QPair<FolderMan::PathValidityResult, QString>
+FolderMan::checkPathValidityForNewFolder(const QString &path, const QUrl &serverUrl, const QString &existingJournal) const
 {
     QPair<FolderMan::PathValidityResult, QString> result;
 
@@ -2055,7 +2066,7 @@ QPair<FolderMan::PathValidityResult, QString> FolderMan::checkPathValidityForNew
         }
     }
 
-    const auto recursiveValidity = checkPathValidityRecursive(path);
+    const auto recursiveValidity = checkPathValidityRecursive(path, false, existingJournal);
     if (!recursiveValidity.isEmpty()) {
         qCDebug(lcFolderMan) << path << recursiveValidity;
         result.first = FolderMan::PathValidityResult::ErrorRecursiveValidity;
@@ -2075,6 +2086,11 @@ QPair<FolderMan::PathValidityResult, QString> FolderMan::checkPathValidityForNew
         QString folderDir = QDir::cleanPath(canonicalPath(f->path())) + '/';
 
         bool differentPaths = QString::compare(folderDir, userDir, cs) != 0;
+        if (!differentPaths && !existingJournal.isEmpty()) {
+            result.first = FolderMan::PathValidityResult::ErrorNonEmptyFolder;
+            result.second = tr("This folder is already connected in privateCloud. Open the existing drive instead.");
+            return result;
+        }
         if (differentPaths && folderDir.startsWith(userDir, cs)) {
             result.first = FolderMan::PathValidityResult::ErrorContainsFolder;
             result.second = tr("Please choose a different location. %1 is already being used as a sync folder.").arg(QDir::toNativeSeparators(path));

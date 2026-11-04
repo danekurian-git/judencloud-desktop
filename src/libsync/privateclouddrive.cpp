@@ -334,7 +334,7 @@ QString defaultSetupPath()
     return QStringLiteral("C:/PPCsyncConfig");
 }
 
-QString Detail::configureBackingPath(const QString &accountIdentity, const QString &path, Backend &backend, QSettings &settings)
+QString Detail::configureBackingPath(const QString &accountIdentity, const QString &path, Backend &backend, QSettings &settings, bool reuseVerifiedFolder)
 {
     const auto separator = accountIdentity.indexOf(QLatin1Char('\n'));
     const auto identity = separator > 0 ? canonicalAccountIdentity(QUrl(accountIdentity.first(separator)), accountIdentity.mid(separator + 1)) : QString();
@@ -354,7 +354,7 @@ QString Detail::configureBackingPath(const QString &accountIdentity, const QStri
     if (admittedPath.isEmpty()) {
         return error;
     }
-    error = backend.emptyDirectoryError(admittedPath);
+    error = reuseVerifiedFolder ? QString() : backend.emptyDirectoryError(admittedPath);
     if (!error.isEmpty()) {
         return error;
     }
@@ -388,17 +388,18 @@ QString Detail::configureBackingPath(const QString &accountIdentity, const QStri
     return {};
 }
 
-QString configureBackingPath(const QString &accountIdentity, const QString &path)
+QString configureBackingPath(const QString &accountIdentity, const QString &path, bool reuseVerifiedFolder)
 {
 #ifdef Q_OS_WIN
     if (isEnabled()) {
         WindowsBackend backend;
         QSettings settings(ConfigFile().configFile(), QSettings::IniFormat);
-        return Detail::configureBackingPath(accountIdentity, path, backend, settings);
+        return Detail::configureBackingPath(accountIdentity, path, backend, settings, reuseVerifiedFolder);
     }
 #else
     Q_UNUSED(accountIdentity)
     Q_UNUSED(path)
+    Q_UNUSED(reuseVerifiedFolder)
 #endif
     return message("The privateCloud files folder requires Windows.");
 }
@@ -531,6 +532,26 @@ QString Detail::mount(const QString &path, Backend &backend)
     }
     if (!mappings.isEmpty() && !ownsMapping(mappings, target)) {
         return conflictError();
+    }
+    const auto previousState = backend.savedState();
+    if (mappings.isEmpty() && !previousState.isEmpty() && !sameTarget(previousState.value(QStringLiteral("target")).toString(), target)) {
+        // Windows removes logon-specific aliases at sign-out, but their saved
+        // label and ownership state can survive. Finish that cleanup first.
+        const auto previousPath = previousState.value(QStringLiteral("path")).toString();
+        if (previousPath.isEmpty()) {
+            return message("A previous privateCloud drive must be disconnected before connecting this account.");
+        }
+        error = Detail::unmount(previousPath, backend);
+        if (!error.isEmpty()) {
+            return error;
+        }
+        if (!backend.savedState().isEmpty()) {
+            return message("A previous privateCloud drive must be disconnected before connecting this account.");
+        }
+        error = backend.mappings(&mappings);
+        if (!error.isEmpty() || !mappings.isEmpty()) {
+            return error.isEmpty() ? conflictError() : error;
+        }
     }
     const auto created = mappings.isEmpty();
     if (created) {

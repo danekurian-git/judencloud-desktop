@@ -126,6 +126,16 @@ public:
         controller.setLocalSyncFolder(path);
     }
 
+    static void setAdoptionProfiles(AccountWizardController &controller, const QStringList &profiles)
+    {
+        controller._privateCloudAdoptionProfilePaths = profiles;
+    }
+
+    static AccountPtr account(const AccountWizardController &controller)
+    {
+        return controller._account;
+    }
+
     static void showDriveSetup(AccountWizardController &controller)
     {
         controller.setCurrentStep(AccountWizardController::DriveSetupStep);
@@ -562,6 +572,125 @@ private Q_SLOTS:
         controller.cancel();
         controller.chooseLocalSyncFolder();
         QCOMPARE(selections, 3);
+    }
+
+    void privateCloudExistingFolderAdmission_data()
+    {
+        QTest::addColumn<bool>("sameServer");
+        QTest::addColumn<bool>("sameAccount");
+        QTest::newRow("matching-server-and-account") << true << true;
+        QTest::newRow("different-account") << true << false;
+        QTest::newRow("different-server") << false << true;
+    }
+
+    void privateCloudExistingFolderAdmission()
+    {
+#ifdef BUILD_FILE_PROVIDER_MODULE
+        QSKIP("Existing local folder adoption uses Windows folder-backed virtual files, not the macOS File Provider.");
+#endif
+        QFETCH(bool, sameServer);
+        QFETCH(bool, sameAccount);
+        QTemporaryDir location;
+        QTemporaryDir profileDirectory;
+        QVERIFY(location.isValid());
+        QVERIFY(profileDirectory.isValid());
+        AccountWizardController controller;
+        AccountWizardControllerTestAccess::preparePrivateCloud(controller, [](const QString &) {
+            return QString{};
+        });
+        const auto account = AccountWizardControllerTestAccess::account(controller);
+        FolderDefinition definition;
+        definition.localPath = FolderDefinition::prepareLocalPath(location.path());
+        definition.targetPath = u"/"_s;
+        definition.journalPath = u".sync_123456789abc.db"_s;
+        definition.virtualFilesMode = Vfs::WindowsCfApi;
+        definition.ignoreHiddenFiles = false;
+        {
+            SyncJournalDb journal(definition.absoluteJournalPath());
+            QVERIFY(journal.open());
+            journal.keyValueStoreSet(u"last_sync"_s, qint64(123456));
+            journal.commit(u"existing account fixture"_s, false);
+        }
+        QFile existingFile(location.filePath(u"keep.txt"_s));
+        QVERIFY(existingFile.open(QIODevice::WriteOnly));
+        QCOMPARE(existingFile.write("existing user data"), qint64(18));
+        existingFile.close();
+        const auto profilePath = profileDirectory.filePath(u"nextcloud.cfg"_s);
+        {
+            QSettings settings(profilePath, QSettings::IniFormat);
+            settings.setValue(u"Accounts/version"_s, 13);
+            settings.beginGroup(u"Accounts/0"_s);
+            settings.setValue(u"version"_s, 13);
+            settings.setValue(u"url"_s, sameServer ? account->url().toString() : u"https://different.example"_s);
+            settings.setValue(u"dav_user"_s, sameAccount ? account->davUser() : u"another-user"_s);
+            settings.beginGroup(u"FoldersWithPlaceholders/2"_s);
+            FolderDefinition::save(settings, definition);
+            settings.sync();
+            QCOMPARE(settings.status(), QSettings::NoError);
+        }
+        AccountWizardControllerTestAccess::setAdoptionProfiles(controller, {profilePath});
+        AccountWizardControllerTestAccess::completeAuthentication(controller);
+        AccountWizardControllerTestAccess::setLocalFolder(controller, location.path());
+        if (sameServer && sameAccount) {
+            QVERIFY2(controller.canFinish(), qPrintable(controller.localSyncFolderError()));
+            const auto adopted = AccountWizardControllerTestAccess::syncFolderDefinition(controller);
+            QCOMPARE(adopted.journalPath, definition.journalPath);
+            QCOMPARE(adopted.ignoreHiddenFiles, false);
+            QCOMPARE(adopted.virtualFilesMode, Vfs::WindowsCfApi);
+            QVERIFY(adopted.paused);
+            QVERIFY(adopted.privateCloudSetupPending);
+            QVERIFY(adopted.privateCloudPreservePinState);
+
+            QQmlApplicationEngine engine;
+            engine.addImportPath(QStringLiteral("qrc:/qml/theme"));
+            engine.addImageProvider(QStringLiteral("svgimage-custom-color"), new Ui::SvgImageProvider);
+            QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/qml/src/gui/wizard/qml/AccountWizardWindow.qml")));
+            const auto object =
+                std::unique_ptr<QObject>(component.createWithInitialProperties({{QStringLiteral("controller"), QVariant::fromValue(&controller)}}));
+            QVERIFY2(object, qPrintable(component.errorString()));
+            const auto window = qobject_cast<QQuickWindow *>(object.get());
+            QVERIFY(window);
+            const auto reuseMessage = window->findChild<QObject *>(QStringLiteral("privateCloudFolderReuse"));
+            QVERIFY(reuseMessage);
+            window->show();
+            QTRY_VERIFY(window->isExposed());
+            QTRY_VERIFY(reuseMessage->property("visible").toBool());
+            QVERIFY(reuseMessage->property("text").toString().contains(QStringLiteral("sync history")));
+
+            // The original profile can change while the server check is outstanding.
+            {
+                QSettings settings(profilePath, QSettings::IniFormat);
+                settings.setValue(u"Accounts/0/dav_user"_s, u"another-user"_s);
+                settings.sync();
+            }
+            AccountWizardControllerTestAccess::showDriveSetup(controller);
+            AccountWizardControllerTestAccess::setBusy(controller, true);
+            QSignalSpy finishedSpy(&controller, &AccountWizardController::finished);
+            AccountWizardControllerTestAccess::completeRemoteFolderCheck(controller);
+            QCOMPARE(controller.currentStep(), AccountWizardController::SyncOptionsStep);
+            QVERIFY(!controller.busy());
+            QVERIFY(!controller.errorText().isEmpty());
+            QCOMPARE(finishedSpy.count(), 0);
+
+            // Switching back to a fresh location must discard the adoption candidate.
+            const auto freshPath = profileDirectory.filePath(u"fresh-folder"_s);
+            AccountWizardControllerTestAccess::setLocalFolder(controller, freshPath);
+            QVERIFY2(controller.canFinish(), qPrintable(controller.localSyncFolderError()));
+            const auto freshDefinition = AccountWizardControllerTestAccess::syncFolderDefinition(controller);
+            QVERIFY(freshDefinition.journalPath.isEmpty());
+            QVERIFY(!freshDefinition.privateCloudPreservePinState);
+            const auto freshReuseMessage = window->findChild<QObject *>(QStringLiteral("privateCloudFolderReuse"));
+            QVERIFY(freshReuseMessage);
+            QTRY_VERIFY(!freshReuseMessage->property("visible").toBool());
+        } else {
+            QVERIFY(!controller.canFinish());
+            QVERIFY(!controller.localSyncFolderError().isEmpty());
+        }
+        QVERIFY(existingFile.open(QIODevice::ReadOnly));
+        QCOMPARE(existingFile.readAll(), QByteArray("existing user data"));
+        SyncJournalDb preserved(definition.absoluteJournalPath());
+        QVERIFY(preserved.open());
+        QCOMPARE(preserved.keyValueStoreGetInt(u"last_sync"_s, -1), qint64(123456));
     }
 
     void privateCloudRechecksEmptyFolderAfterRemoteCheck()

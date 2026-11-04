@@ -12,6 +12,15 @@ internal NTFS drives. USB drives are not supported. The app presents your files
 through **privateCloud (J:)** and downloads file contents when opened. J: must be
 available. Only files accessible to your server account can be synchronized.
 
+To reuse an existing Nextcloud folder, quit the other sync client, sign in to the
+same server account, and select that folder. Keep the previous Nextcloud account
+configuration on the PC so privateCloud can verify ownership. Setup displays
+"Existing sync folder verified" when it recognizes a compatible folder. It keeps
+the files, sync database, selective-sync choices and existing download preferences,
+and backs up the previous configuration and database before connecting the drive.
+Folders belonging to another account, missing their configuration or containing
+ambiguous sync databases are refused. A fresh empty folder remains an option.
+
 The connection helper supports privateCloud's fixed-server HTTPS connection when
 a Tailscale exit node is enabled. Other applications retain their existing routing.
 

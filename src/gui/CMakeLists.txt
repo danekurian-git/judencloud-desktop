@@ -82,6 +82,8 @@ set(client_SRCS
     application.cpp
     privateclouddrivecontroller.h
     privateclouddrivecontroller.cpp
+    privatecloudfolderadoption.h
+    privatecloudfolderadoption.cpp
     privatecloudstatus.h
     privatecloudstatus.cpp
     privatecloudissuesdialog.h

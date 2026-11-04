@@ -21,6 +21,7 @@
 #include "configfile.h"
 #include "creds/flow2auth.h"
 #include "networkjobs.h"
+#include "privatecloudfolderadoption.h"
 
 class QNetworkReply;
 class QWindow;
@@ -69,6 +70,7 @@ class AccountWizardController : public QObject
     Q_PROPERTY(QString localSyncFolder READ localSyncFolder NOTIFY localSyncFolderChanged)
     Q_PROPERTY(QString localSyncFolderDisplay READ localSyncFolderDisplay NOTIFY localSyncFolderChanged)
     Q_PROPERTY(QString localSyncFolderError READ localSyncFolderError NOTIFY localSyncFolderErrorChanged)
+    Q_PROPERTY(bool reusingExistingSyncFolder READ reusingExistingSyncFolder NOTIFY reusingExistingSyncFolderChanged)
     Q_PROPERTY(QString localSyncFolderFreeSpace READ localSyncFolderFreeSpace NOTIFY localSyncFolderFreeSpaceChanged)
     Q_PROPERTY(bool localSyncFolderRequired READ localSyncFolderRequired NOTIFY localSyncFolderRequiredChanged)
     Q_PROPERTY(SyncMode syncMode READ syncMode NOTIFY syncModeChanged)
@@ -155,6 +157,10 @@ public:
     [[nodiscard]] QString localSyncFolder() const;
     [[nodiscard]] QString localSyncFolderDisplay() const;
     [[nodiscard]] QString localSyncFolderError() const;
+    [[nodiscard]] bool reusingExistingSyncFolder() const
+    {
+        return _privateCloudAdoption.found && _privateCloudAdoption.error.isEmpty();
+    }
     [[nodiscard]] QString localSyncFolderFreeSpace() const;
     [[nodiscard]] bool localSyncFolderRequired() const;
     [[nodiscard]] SyncMode syncMode() const;
@@ -229,6 +235,7 @@ public:
     Q_INVOKABLE void useClientCertificateForSecureConnection();
 
 Q_SIGNALS:
+    void reusingExistingSyncFolderChanged();
     void currentStepChanged();
     void serverUrlChanged();
     void serverUrlEditableChanged();
@@ -343,6 +350,8 @@ private:
     bool _cancelled = false;
     std::function<QString(const QString &)> _privateCloudAvailabilityCheck;
     QPointer<Folder> _privateCloudFolder;
+    PrivateCloudFolderAdoption::Result _privateCloudAdoption;
+    QStringList _privateCloudAdoptionProfilePaths = PrivateCloudFolderAdoption::defaultProfilePaths();
     LocalSyncFolderPicker _localSyncFolderPicker;
     QPointer<QWindow> _window;
     std::unique_ptr<Flow2Auth> _flow2Auth;

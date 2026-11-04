@@ -77,6 +77,102 @@ private Q_SLOTS:
         QStandardPaths::setTestModeEnabled(true);
     }
 
+    void testAdoptFolderPreservesExistingJournal()
+    {
+        QTemporaryDir config;
+        QTemporaryDir local;
+        QVERIFY(config.isValid());
+        QVERIFY(local.isValid());
+        const auto previousConfig = ConfigFile().configPath();
+        FolderMan::resetInstance();
+        const auto restore = qScopeGuard([previousConfig] {
+            FolderMan::resetInstance();
+            ConfigFile::setConfDir(previousConfig);
+        });
+        QVERIFY(ConfigFile::setConfDir(config.path()));
+        _fm = FolderMan::instance();
+        const auto account = Account::create();
+        account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(u"https://cloud.example"_s) : Account::enforcedServerUrl());
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto state = AccountStatePtr(new FakeAccountState(account));
+        FolderDefinition definition;
+        definition.localPath = FolderDefinition::prepareLocalPath(local.path());
+        definition.targetPath = u"/"_s;
+        definition.alias = u"adopt-existing"_s;
+        definition.journalPath = u".sync_123456789abc.db"_s;
+        definition.paused = true;
+        definition.ignoreHiddenFiles = false;
+        SyncJournalFileRecord record;
+        record._path = "preserved.txt"_ba;
+        record._fileId = "existing-server-file-id"_ba;
+        record._etag = "existing-etag"_ba;
+        record._inode = 123;
+        record._modtime = 1700000000;
+        record._type = ItemTypeFile;
+        record._fileSize = 5;
+        {
+            SyncJournalDb journal(definition.absoluteJournalPath());
+            QVERIFY(journal.open());
+            QVERIFY(journal.setFileRecord(record));
+            journal.setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, {u"excluded/"_s});
+            journal.setSelectiveSyncList(SyncJournalDb::SelectiveSyncWhiteList, {u"allowed/"_s});
+            journal.keyValueStoreSet(u"last_sync"_s, qint64(123456));
+            journal.commit(u"existing sync history"_s, false);
+        }
+        QFile content(local.filePath(u"preserved.txt"_s));
+        QVERIFY(content.open(QIODevice::WriteOnly));
+        QCOMPARE(content.write("bytes"), qint64(5));
+        content.close();
+
+        const auto folder = _fm->addFolder(state.data(), definition, true);
+        QVERIFY(folder);
+        QCOMPARE(folder->journalDb()->databaseFilePath(), definition.absoluteJournalPath());
+        SyncJournalFileRecord loaded;
+        QVERIFY(folder->journalDb()->getFileRecord(record._path, &loaded));
+        QVERIFY(loaded.isValid());
+        QCOMPARE(loaded._fileId, record._fileId);
+        QCOMPARE(loaded._etag, record._etag);
+        QCOMPARE(loaded._modtime, record._modtime);
+        QCOMPARE(folder->journalDb()->keyValueStoreGetInt(u"last_sync"_s, -1), qint64(123456));
+        bool ok = false;
+        QCOMPARE(folder->journalDb()->getSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, &ok), QStringList{u"excluded/"_s});
+        QVERIFY(ok);
+        QCOMPARE(folder->journalDb()->getSelectiveSyncList(SyncJournalDb::SelectiveSyncWhiteList, &ok), QStringList{u"allowed/"_s});
+        QVERIFY(ok);
+        QVERIFY(content.open(QIODevice::ReadOnly));
+        QCOMPARE(content.readAll(), QByteArray("bytes"));
+        QVERIFY(!QFileInfo::exists(local.filePath(definition.defaultJournalPath(account))));
+        FolderMan::resetInstance();
+    }
+
+    void testAdoptFolderRejectsMissingJournal()
+    {
+        QTemporaryDir config;
+        QTemporaryDir local;
+        QVERIFY(config.isValid());
+        QVERIFY(local.isValid());
+        const auto previousConfig = ConfigFile().configPath();
+        FolderMan::resetInstance();
+        const auto restore = qScopeGuard([previousConfig] {
+            FolderMan::resetInstance();
+            ConfigFile::setConfDir(previousConfig);
+        });
+        QVERIFY(ConfigFile::setConfDir(config.path()));
+        _fm = FolderMan::instance();
+        const auto account = Account::create();
+        account->setUrl(Account::enforcedServerUrl().isEmpty() ? QUrl(u"https://cloud.example"_s) : Account::enforcedServerUrl());
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto state = AccountStatePtr(new FakeAccountState(account));
+        FolderDefinition definition;
+        definition.localPath = FolderDefinition::prepareLocalPath(local.path());
+        definition.targetPath = u"/"_s;
+        definition.journalPath = u".sync_123456789abc.db"_s;
+        definition.paused = true;
+        QVERIFY(!_fm->addFolder(state.data(), definition, true));
+        QVERIFY(QDir(local.path()).entryList(QDir::Files | QDir::Hidden).isEmpty());
+        FolderMan::resetInstance();
+    }
+
     void testPrivateCloudSetupPendingSettingsRoundTrip()
     {
         QTemporaryDir dir;
@@ -89,20 +185,27 @@ private Q_SLOTS:
         definition.paused = true;
         for (const auto pending : {true, false}) {
             definition.privateCloudSetupPending = pending;
-            FolderDefinition::save(settings, definition);
-            settings.sync();
-            QSettings reloadedSettings(settings.fileName(), QSettings::IniFormat);
-            FolderDefinition reloaded;
-            QVERIFY(FolderDefinition::load(reloadedSettings, definition.alias, &reloaded));
-            QCOMPARE(reloaded.privateCloudSetupPending, pending);
-            QCOMPARE(reloaded.paused, definition.paused);
-            QCOMPARE(reloaded.localPath, definition.localPath);
+            for (const auto preservePinState : {true, false}) {
+                definition.privateCloudPreservePinState = preservePinState;
+                FolderDefinition::save(settings, definition);
+                settings.sync();
+                QSettings reloadedSettings(settings.fileName(), QSettings::IniFormat);
+                FolderDefinition reloaded;
+                QVERIFY(FolderDefinition::load(reloadedSettings, definition.alias, &reloaded));
+                QCOMPARE(reloaded.privateCloudSetupPending, pending);
+                QCOMPARE(reloaded.privateCloudPreservePinState, preservePinState);
+                QCOMPARE(reloaded.paused, definition.paused);
+                QCOMPARE(reloaded.localPath, definition.localPath);
+            }
         }
         settings.remove(QStringLiteral("privateCloudSetupPending"));
+        settings.remove(QStringLiteral("privateCloudPreservePinState"));
         FolderDefinition legacy;
         legacy.privateCloudSetupPending = true;
+        legacy.privateCloudPreservePinState = true;
         QVERIFY(FolderDefinition::load(settings, definition.alias, &legacy));
         QVERIFY(!legacy.privateCloudSetupPending);
+        QVERIFY(!legacy.privateCloudPreservePinState);
     }
 
 #ifdef Q_OS_WIN

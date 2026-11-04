@@ -1973,6 +1973,7 @@ void FolderDefinition::save(QSettings &settings, const FolderDefinition &folder)
     settings.setValue(QLatin1String("targetPath"), folder.targetPath);
     settings.setValue(QLatin1String("paused"), folder.paused);
     settings.setValue(QStringLiteral("privateCloudSetupPending"), folder.privateCloudSetupPending);
+    settings.setValue(QStringLiteral("privateCloudPreservePinState"), folder.privateCloudPreservePinState);
     settings.setValue(QLatin1String("ignoreHiddenFiles"), folder.ignoreHiddenFiles);
 
     settings.setValue(QStringLiteral("virtualFilesMode"), Vfs::modeToString(folder.virtualFilesMode));
@@ -2007,6 +2008,7 @@ bool FolderDefinition::load(QSettings &settings, const QString &alias, FolderDef
     folder->targetPath = settings.value(QLatin1String("targetPath")).toString();
     folder->paused = settings.value(QLatin1String("paused")).toBool();
     folder->privateCloudSetupPending = settings.value(QStringLiteral("privateCloudSetupPending"), false).toBool();
+    folder->privateCloudPreservePinState = settings.value(QStringLiteral("privateCloudPreservePinState"), false).toBool();
     folder->ignoreHiddenFiles = settings.value(QLatin1String("ignoreHiddenFiles"), QVariant(true)).toBool();
     folder->navigationPaneClsid = settings.value(QLatin1String("navigationPaneClsid")).toUuid();
 

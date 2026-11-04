@@ -62,6 +62,8 @@ public:
     bool paused = false;
     /// Whether privateCloud drive setup must complete before normal use.
     bool privateCloudSetupPending = false;
+    /// Preserve an adopted folder's download preferences across setup retries.
+    bool privateCloudPreservePinState = false;
     /// whether the folder syncs hidden files
     bool ignoreHiddenFiles = false;
     /// Which virtual files setting the folder uses
@@ -214,6 +216,10 @@ public:
 
     [[nodiscard]] bool syncPaused() const;
     [[nodiscard]] bool privateCloudSetupPending() const;
+    [[nodiscard]] bool privateCloudPreservePinState() const
+    {
+        return _definition.privateCloudPreservePinState;
+    }
     void setPrivateCloudSetupPending(bool pending);
 
     /**

@@ -1645,7 +1645,18 @@ void AccountWizardController::validateLocalSyncFolder()
         }
     }
 
-    auto localSyncFolderError = FolderMan::instance()->checkPathValidityForNewFolder(_localSyncFolder, localFolderServerUrl()).second;
+    const auto previouslyReusingFolder = reusingExistingSyncFolder();
+    _privateCloudAdoption = privateCloudMode() && !_privateCloudFolder
+        ? PrivateCloudFolderAdoption::inspect(_account, _localSyncFolder, _privateCloudAdoptionProfilePaths)
+        : PrivateCloudFolderAdoption::Result{};
+    if (previouslyReusingFolder != reusingExistingSyncFolder()) {
+        Q_EMIT reusingExistingSyncFolderChanged();
+    }
+    const auto existingJournal = reusingExistingSyncFolder() ? _privateCloudAdoption.definition.journalPath : QString();
+    auto localSyncFolderError = _privateCloudAdoption.error;
+    if (localSyncFolderError.isEmpty()) {
+        localSyncFolderError = FolderMan::instance()->checkPathValidityForNewFolder(_localSyncFolder, localFolderServerUrl(), existingJournal).second;
+    }
 
     const auto neededBytes = requiredLocalSpace();
     const auto freeBytes = availableLocalSpace();
@@ -1671,7 +1682,7 @@ void AccountWizardController::validateLocalSyncFolder()
     }
 #endif
     if (folderRequired && (_localSyncFolderSelected || privateCloudMode()) && !_localSyncFolderOverride && localSyncFolderError.isEmpty()) {
-        if (localFolderContainsData(_localSyncFolder)) {
+        if (!reusingExistingSyncFolder() && localFolderContainsData(_localSyncFolder)) {
             localSyncFolderError = tr("Please choose an empty local sync folder.");
         }
     }
@@ -1851,7 +1862,13 @@ void AccountWizardController::completeRemoteFolderCheck()
             // A remote check may take time. Recheck admission before creating the journal or provider.
             validateLocalSyncFolder();
             const QString identity = _account->url().toString(QUrl::FullyEncoded) + QLatin1Char('\n') + _account->davUser();
-            const auto backingError = _localSyncFolderValid ? PrivateCloudDrive::configureBackingPath(identity, _localSyncFolder) : _localSyncFolderError;
+            auto backingError = _localSyncFolderValid ? QString() : _localSyncFolderError;
+            if (backingError.isEmpty() && reusingExistingSyncFolder()) {
+                backingError = PrivateCloudFolderAdoption::prepare(_account, _privateCloudAdoption);
+            }
+            if (backingError.isEmpty()) {
+                backingError = PrivateCloudDrive::configureBackingPath(identity, _localSyncFolder, reusingExistingSyncFolder());
+            }
             if (!backingError.isEmpty()) {
                 setErrorText(backingError);
                 setBusy(false);
@@ -1873,7 +1890,7 @@ void AccountWizardController::completeRemoteFolderCheck()
             setBusy(false);
             return;
         }
-        if (!_privateCloudFolder->vfs().setPinState(QString(), PinState::OnlineOnly)) {
+        if (!_privateCloudFolder->privateCloudPreservePinState() && !_privateCloudFolder->vfs().setPinState(QString(), PinState::OnlineOnly)) {
             setErrorText(tr("Could not enable on-demand files. Please try again."));
             setBusy(false);
             return;
@@ -1898,9 +1915,17 @@ void AccountWizardController::completeRemoteFolderCheck()
 FolderDefinition AccountWizardController::syncFolderDefinition() const
 {
     FolderDefinition folderDefinition;
+    if (reusingExistingSyncFolder()) {
+        folderDefinition = _privateCloudAdoption.definition;
+        folderDefinition.alias.clear();
+        folderDefinition.navigationPaneClsid = {};
+        folderDefinition.privateCloudPreservePinState = true;
+    }
     folderDefinition.localPath = FolderDefinition::prepareLocalPath(_localSyncFolder);
     folderDefinition.targetPath = FolderDefinition::prepareTargetPath(_remoteFolder);
-    folderDefinition.ignoreHiddenFiles = FolderMan::instance()->ignoreHiddenFiles();
+    if (!reusingExistingSyncFolder()) {
+        folderDefinition.ignoreHiddenFiles = FolderMan::instance()->ignoreHiddenFiles();
+    }
     folderDefinition.paused = privateCloudMode();
     folderDefinition.privateCloudSetupPending = privateCloudMode();
     folderDefinition.securityScopedBookmarkData = _localSyncFolderBookmarkData;
@@ -1931,7 +1956,7 @@ bool AccountWizardController::createSyncFolder(AccountState *accountState)
 
     auto *folderMan = FolderMan::instance();
     folderMan->setSyncEnabled(false);
-    const auto folder = folderMan->addFolder(accountState, folderDefinition);
+    const auto folder = folderMan->addFolder(accountState, folderDefinition, reusingExistingSyncFolder());
     folderMan->setSyncEnabled(true);
 
     if (!folder) {
@@ -1947,9 +1972,12 @@ bool AccountWizardController::createSyncFolder(AccountState *accountState)
         folder->setRootPinState(PinState::OnlineOnly);
     }
 
-    folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, _selectiveSyncBlacklist);
-    const auto preWhitelistRoot = _syncMode != SyncEverything || (!_askBeforeLargeFolders && !_askBeforeExternalStorage);
-    folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncWhiteList, preWhitelistRoot ? QStringList() << QLatin1String("/") : QStringList());
+    if (!reusingExistingSyncFolder()) {
+        folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncBlackList, _selectiveSyncBlacklist);
+        const auto preWhitelistRoot = _syncMode != SyncEverything || (!_askBeforeLargeFolders && !_askBeforeExternalStorage);
+        folder->journalDb()->setSelectiveSyncList(SyncJournalDb::SelectiveSyncWhiteList,
+                                                  preWhitelistRoot ? QStringList() << QLatin1String("/") : QStringList());
+    }
     folderMan->scheduleAllFolders();
     return true;
 }

@@ -21,6 +21,7 @@
 #endif
 
 using namespace OCC;
+using namespace Qt::StringLiterals;
 
 class FakeDriveBackend final : public PrivateCloudDrive::Detail::Backend
 {
@@ -34,6 +35,8 @@ public:
     QString addError;
     QString removeError;
     QString emptyError;
+    QString labelError;
+    QString saveStateError;
     bool fixed = true;
     bool race = false;
     bool raceOnRemove = false;
@@ -99,6 +102,9 @@ public:
     QString setLabel(const QVariant &value) override
     {
         ++labelWrites;
+        if (!labelError.isEmpty()) {
+            return labelError;
+        }
         currentLabel = value;
         return {};
     }
@@ -108,6 +114,9 @@ public:
     }
     QString saveState(const QVariantMap &value) override
     {
+        if (!saveStateError.isEmpty()) {
+            return saveStateError;
+        }
         state = value;
         return {};
     }
@@ -219,6 +228,31 @@ private Q_SLOTS:
         QVERIFY2(readError.isEmpty(), qPrintable(readError));
     }
 
+    void testConfigureVerifiedFolderReusesNonEmptyLocation()
+    {
+        writeAdoptedRoot(adoptedRoot());
+        QSettings settings(ConfigFile().configFile(), QSettings::IniFormat);
+        settings.setValue(u"Unrelated/Keep"_s, u"unchanged"_s);
+        FakeDriveBackend backend;
+        backend.target = u"\\??\\D:\\Cloud\\Chosen"_s;
+        backend.emptyError = u"Existing files and sync database"_s;
+
+        QCOMPARE(PrivateCloudDrive::Detail::configureBackingPath(accountIdentity(), u"D:/Cloud/Chosen"_s, backend, settings), backend.emptyError);
+        QCOMPARE(settings.value(u"PrivateCloudBackingRoot/Path"_s).toString(), u"D:/Cloud/Data"_s);
+        QCOMPARE(backend.emptyChecks, 1);
+
+        const auto error = PrivateCloudDrive::Detail::configureBackingPath(accountIdentity(), u"D:/Cloud/Chosen"_s, backend, settings, true);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(backend.emptyChecks, 1);
+        QVERIFY(backend.requiredExistingPath);
+        QCOMPARE(settings.value(u"PrivateCloudBackingRoot/Path"_s).toString(), u"D:/Cloud/Chosen"_s);
+        QCOMPARE(settings.value(u"PrivateCloudBackingRoot/AccountId"_s).toString(), u"canonical-user-01"_s);
+        QCOMPARE(settings.value(u"Unrelated/Keep"_s).toString(), u"unchanged"_s);
+        QCOMPARE(backend.added, 0);
+        QCOMPARE(backend.removed, 0);
+        QCOMPARE(backend.labelWrites, 0);
+    }
+
     void testConfigureBackingPathRejectsInvalidAdmission_data()
     {
         QTest::addColumn<QString>("identity");
@@ -226,13 +260,18 @@ private Q_SLOTS:
         QTest::addColumn<QString>("target");
         QTest::addColumn<QString>("storageError");
         QTest::addColumn<QString>("emptyError");
+        QTest::addColumn<bool>("reuseVerifiedFolder");
         const auto add = [](const char *name,
                             const QString &identity,
                             const QString &path = QStringLiteral("D:/Cloud/Chosen"),
                             const QString &target = QStringLiteral("\\??\\D:\\Cloud\\Chosen"),
                             const QString &storageError = {},
                             const QString &emptyError = {}) {
-            QTest::newRow(name) << identity << path << target << storageError << emptyError;
+            QTest::newRow(name) << identity << path << target << storageError << emptyError << false;
+            if (emptyError.isEmpty()) {
+                const auto reuseName = QByteArray("verified-folder-") + name;
+                QTest::newRow(reuseName.constData()) << identity << path << target << storageError << emptyError << true;
+            }
         };
         add("missing identity", {});
         add("no server separator", QStringLiteral("canonical-user-01"));
@@ -281,13 +320,14 @@ private Q_SLOTS:
         QFETCH(QString, target);
         QFETCH(QString, storageError);
         QFETCH(QString, emptyError);
+        QFETCH(bool, reuseVerifiedFolder);
         writeAdoptedRoot(adoptedRoot());
         QSettings settings(ConfigFile().configFile(), QSettings::IniFormat);
         FakeDriveBackend backend;
         backend.target = target;
         backend.pathError = storageError;
         backend.emptyError = emptyError;
-        QVERIFY(!PrivateCloudDrive::Detail::configureBackingPath(identity, path, backend, settings).isEmpty());
+        QVERIFY(!PrivateCloudDrive::Detail::configureBackingPath(identity, path, backend, settings, reuseVerifiedFolder).isEmpty());
         QCOMPARE(settings.value(QStringLiteral("PrivateCloudBackingRoot/Path")).toString(), QStringLiteral("D:/Cloud/Data"));
         QCOMPARE(settings.value(QStringLiteral("PrivateCloudBackingRoot/AccountId")).toString(), QStringLiteral("canonical-user-01"));
         QCOMPARE(backend.added, 0);
@@ -640,6 +680,105 @@ private Q_SLOTS:
         QVERIFY(PrivateCloudDrive::Detail::unmount(QStringLiteral("account-a"), backend).isEmpty());
         QVERIFY(backend.targets.isEmpty());
         QVERIFY(backend.state.isEmpty());
+    }
+
+    void testMountRecoversSavedStateAfterSignOut()
+    {
+        FakeDriveBackend backend;
+        backend.currentLabel = QStringLiteral("Previous label");
+        QVERIFY(PrivateCloudDrive::Detail::mount(QStringLiteral("missing-old-folder"), backend).isEmpty());
+        backend.targets.clear();
+        backend.target = QStringLiteral("\\??\\D:\\ExistingCloudFolder");
+        backend.validations = 0;
+
+        const auto result = PrivateCloudDrive::Detail::mount(QStringLiteral("new-folder"), backend);
+        QVERIFY2(result.isEmpty(), qPrintable(result));
+        QCOMPARE(backend.validations, 1); // The old backing folder need not exist.
+        QCOMPARE(backend.targets, QStringList{backend.target});
+        QCOMPARE(backend.state.value(QStringLiteral("target")).toString(), backend.target);
+        QCOMPARE(backend.state.value(QStringLiteral("previousLabel")).toString(), QStringLiteral("Previous label"));
+        QCOMPARE(backend.currentLabel.toString(), QStringLiteral("privateCloud"));
+        QCOMPARE(backend.removed, 0);
+    }
+
+    void testSavedStateRecoveryPreservesOccupiedDrive_data()
+    {
+        QTest::addColumn<QStringList>("occupiedTargets");
+        QTest::newRow("old-alias") << QStringList{FakeDriveBackend().target};
+        QTest::newRow("foreign-drive") << QStringList{QStringLiteral("\\Device\\OtherDrive")};
+        QTest::newRow("stacked-alias") << QStringList{FakeDriveBackend().target, QStringLiteral("\\Device\\OtherDrive")};
+    }
+
+    void testSavedStateRecoveryPreservesOccupiedDrive()
+    {
+        QFETCH(QStringList, occupiedTargets);
+        FakeDriveBackend backend;
+        QVERIFY(PrivateCloudDrive::Detail::mount(QStringLiteral("old-folder"), backend).isEmpty());
+        const auto saved = backend.state;
+        backend.targets = occupiedTargets;
+        backend.target = QStringLiteral("\\??\\D:\\ExistingCloudFolder");
+        QVERIFY(!PrivateCloudDrive::Detail::mount(QStringLiteral("new-folder"), backend).isEmpty());
+        QCOMPARE(backend.targets, occupiedTargets);
+        QCOMPARE(backend.state, saved);
+        QCOMPARE(backend.added, 1);
+        QCOMPARE(backend.removed, 0);
+        QCOMPARE(backend.labelWrites, 1);
+    }
+
+    void testSavedStateCleanupFailureCanBeRetried_data()
+    {
+        QTest::addColumn<bool>("labelFailure");
+        QTest::newRow("restore-label") << true;
+        QTest::newRow("clear-state") << false;
+    }
+
+    void testSavedStateCleanupFailureCanBeRetried()
+    {
+        QFETCH(bool, labelFailure);
+        FakeDriveBackend backend;
+        backend.currentLabel = QStringLiteral("Previous label");
+        QVERIFY(PrivateCloudDrive::Detail::mount(QStringLiteral("old-folder"), backend).isEmpty());
+        const auto saved = backend.state;
+        backend.targets.clear();
+        backend.target = QStringLiteral("\\??\\D:\\ExistingCloudFolder");
+        const auto error = QStringLiteral("Access denied");
+        if (labelFailure) {
+            backend.labelError = error;
+        } else {
+            backend.saveStateError = error;
+        }
+        QCOMPARE(PrivateCloudDrive::Detail::mount(QStringLiteral("new-folder"), backend), error);
+        QCOMPARE(backend.state, saved);
+        QVERIFY(backend.targets.isEmpty());
+        QCOMPARE(backend.added, 1);
+        backend.labelError.clear();
+        backend.saveStateError.clear();
+        QVERIFY(PrivateCloudDrive::Detail::mount(QStringLiteral("new-folder"), backend).isEmpty());
+        QCOMPARE(backend.targets, QStringList{backend.target});
+        QCOMPARE(backend.state.value(QStringLiteral("previousLabel")).toString(), QStringLiteral("Previous label"));
+    }
+
+    void testSavedStateRecoveryRechecksDriveOwnership_data()
+    {
+        QTest::addColumn<int>("replaceOnQuery");
+        QTest::newRow("before-cleanup") << 2;
+        QTest::newRow("after-cleanup") << 3;
+    }
+
+    void testSavedStateRecoveryRechecksDriveOwnership()
+    {
+        QFETCH(int, replaceOnQuery);
+        FakeDriveBackend backend;
+        QVERIFY(PrivateCloudDrive::Detail::mount(QStringLiteral("old-folder"), backend).isEmpty());
+        backend.targets.clear();
+        backend.target = QStringLiteral("\\??\\D:\\ExistingCloudFolder");
+        backend.queries = 0;
+        backend.replaceOnQuery = replaceOnQuery;
+        QVERIFY(!PrivateCloudDrive::Detail::mount(QStringLiteral("new-folder"), backend).isEmpty());
+        QCOMPARE(backend.targets, QStringList{QStringLiteral("\\Device\\OtherDrive")});
+        QCOMPARE(backend.added, 1);
+        QCOMPARE(backend.removed, 0);
+        QCOMPARE(backend.labelWrites, replaceOnQuery == 2 ? 1 : 2);
     }
 
     void testNotFixedDriveRolledBack()
