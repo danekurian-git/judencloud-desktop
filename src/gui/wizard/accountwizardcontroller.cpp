@@ -1918,7 +1918,7 @@ FolderDefinition AccountWizardController::syncFolderDefinition() const
     if (reusingExistingSyncFolder()) {
         folderDefinition = _privateCloudAdoption.definition;
         folderDefinition.alias.clear();
-        folderDefinition.navigationPaneClsid = {};
+        folderDefinition.navigationPaneClsid = QUuid{};
         folderDefinition.privateCloudPreservePinState = true;
     }
     folderDefinition.localPath = FolderDefinition::prepareLocalPath(_localSyncFolder);
