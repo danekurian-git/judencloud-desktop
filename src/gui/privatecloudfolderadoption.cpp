@@ -4,6 +4,7 @@
  */
 #include "privatecloudfolderadoption.h"
 #include "account.h"
+#include "common/ownsql.h"
 #include "common/utility.h"
 #include "configfile.h"
 
@@ -19,6 +20,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QUuid>
 #include <vector>
 
@@ -105,6 +107,11 @@ PrivateCloudFolderAdoption::Result PrivateCloudFolderAdoption::inspect(const Acc
         result.error = QCoreApplication::translate("PrivateCloudFolderAdoption", message);
         return result;
     };
+    for (const auto &legacyName : {u".csync_journal.db"_s, u".csync_journal.db-wal"_s, u".csync_journal.db-shm"_s}) {
+        if (QFileInfo::exists(QDir(root).filePath(legacyName))) {
+            return fail("This folder contains an obsolete sync journal. Your files were kept. Contact your administrator before reusing it.");
+        }
+    }
     for (const auto &profile : profiles) {
         if (!QFileInfo::exists(profile)) {
             continue;
@@ -252,6 +259,45 @@ QString PrivateCloudFolderAdoption::prepare(const AccountPtr &account,
     const auto bytes = QJsonDocument(manifest).toJson();
     if (!record.open(QIODevice::WriteOnly) || record.write(bytes) != bytes.size() || !record.commit()) {
         return failure;
+    }
+
+    // The normal journal opener can replace a corrupt database. Validate a disposable
+    // copy first; SQLite may rebuild its shared-memory sidecar even during read-only use.
+    QTemporaryDir validation(QDir(destination).filePath(u"validation-XXXXXX"_s));
+    if (!validation.isValid()) {
+        return failure;
+    }
+    for (const auto &source : sources) {
+        if (source == current.profilePath) {
+            continue;
+        }
+        const auto name = QFileInfo(source).fileName();
+        if (!QFile::copy(QDir(destination).filePath(name), validation.filePath(name))) {
+            return failure;
+        }
+    }
+    const auto invalidJournal = QCoreApplication::translate("PrivateCloudFolderAdoption",
+                                                            "The existing sync database is damaged or is not a supported sync journal. Your files and original "
+                                                            "sync history were kept. Restore a valid backup or contact your administrator.");
+    SqlDatabase database;
+    if (!database.openReadOnly(validation.filePath(current.definition.journalPath))) {
+        return invalidJournal;
+    }
+    SqlQuery metadataTable(database);
+    metadataTable.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata';", true);
+    if (!metadataTable.exec()) {
+        return invalidJournal;
+    }
+    const auto table = metadataTable.next();
+    if (!table.ok || !table.hasData) {
+        return invalidJournal;
+    }
+    // These columns predate the supported configuration formats. Newer optional
+    // columns remain the responsibility of the existing journal migrations.
+    SqlQuery metadataColumns(database);
+    metadataColumns.prepare("SELECT phash, pathlen, path, inode, modtime, type, md5 FROM metadata LIMIT 0;", true);
+    if (!metadataColumns.exec() || !metadataColumns.next().ok) {
+        return invalidJournal;
     }
     return {};
 }

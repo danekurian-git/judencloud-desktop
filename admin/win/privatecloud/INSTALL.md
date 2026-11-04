@@ -18,6 +18,8 @@ configuration on the PC so privateCloud can verify ownership. Setup displays
 "Existing sync folder verified" when it recognizes a compatible folder. It keeps
 the files, sync database, selective-sync choices and existing download preferences,
 and backs up the previous configuration and database before connecting the drive.
+The copied database must pass an integrity check before the folder is adopted;
+damaged sync history is refused without resetting the original database.
 Folders belonging to another account, missing their configuration or containing
 ambiguous sync databases are refused. A fresh empty folder remains an option.
 
