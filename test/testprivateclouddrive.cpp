@@ -269,7 +269,7 @@ private Q_SLOTS:
                             const QString &emptyError = {}) {
             QTest::newRow(name) << identity << path << target << storageError << emptyError << false;
             if (emptyError.isEmpty()) {
-                const auto reuseName = QByteArray("verified-folder-") + name;
+                const QByteArray reuseName = QByteArray("verified-folder-") + name;
                 QTest::newRow(reuseName.constData()) << identity << path << target << storageError << emptyError << true;
             }
         };

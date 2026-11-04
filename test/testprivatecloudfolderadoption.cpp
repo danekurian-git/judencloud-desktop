@@ -326,7 +326,7 @@ private Q_SLOTS:
     void rejectsDamagedJournalWithValidHeader()
     {
         Fixture fixture;
-        const auto damaged = QByteArray("SQLite format 3\0", 16) + QByteArray(4096, 'x');
+        const QByteArray damaged = QByteArray("SQLite format 3\0", 16) + QByteArray(4096, 'x');
         QVERIFY(Fixture::write(fixture.definition.absoluteJournalPath(), damaged));
         const auto profileBytes = Fixture::read(fixture.profile);
         const auto admitted = fixture.inspect();

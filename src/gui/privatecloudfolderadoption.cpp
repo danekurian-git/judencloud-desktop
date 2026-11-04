@@ -210,7 +210,7 @@ QString PrivateCloudFolderAdoption::prepare(const AccountPtr &account,
     }
     auto sources = QStringList{current.profilePath, current.definition.absoluteJournalPath()};
     for (const auto &suffix : {u"-wal"_s, u"-shm"_s}) {
-        const auto sidecar = current.definition.absoluteJournalPath() + suffix;
+        const QString sidecar = current.definition.absoluteJournalPath() + suffix;
         if (QFileInfo::exists(sidecar)) {
             sources.append(sidecar);
         }
